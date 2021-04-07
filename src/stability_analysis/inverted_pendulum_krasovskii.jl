@@ -44,9 +44,9 @@ f_cl = F_CL(g)
 # load Lyapunov Razumikhin function
 
 # include Lyapunov loss function
-include("../lyapunov/razumikhin.jl")
+include("../lyapunov/krasovskii.jl")
 # include("model_nn.jl")
-model_v = Lyapunov(data_dim, act=C2_relu, layer_sizes=[16,16])
+model_v = Lyapunov(data_dim*(nvdelays+1), act=C2_relu, layer_sizes=[128,128])
 pv,rev = Flux.destructure(model_v)
 pf,ref = Flux.destructure(f_cl)
 
@@ -112,7 +112,13 @@ end
 # data generation
 
 using Flux.Data
-function generate_data(pf, batch_size, ntrajs; init_loss=true, shuffle=true)
+
+# some masks
+v_mask = Array(1:(length(vlags)+1)*data_dim)
+indices_f_only = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
+f_mask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f_only)...)
+
+function generate_data(pf, batch_size, ntrajs; shuffle=true)
 
     # define set of initial conditions S (use a grid on S)
     max_displacement = 1.0
@@ -132,7 +138,7 @@ function generate_data(pf, batch_size, ntrajs; init_loss=true, shuffle=true)
     # sampling (this should be the same frequency as in vlags)
     Δts = 0.01
     ts = Array(t0:Δts:T)
-    init_ts = Array(t0-maximum(lags):Δts:t0)[1:end-1]
+    init_ts = Array(t0-maximum(2*lags):Δts:t0)[1:end-1]
 
     # stopping condition to avoid finite escape (stops at time step where condition is satisfied)
     condition(u,t,integrator) = sum(abs2, u) >= umax^2
@@ -142,38 +148,25 @@ function generate_data(pf, batch_size, ntrajs; init_loss=true, shuffle=true)
     trajs = []
     for u0 in S
         sol = predict(u0, (p,t)->u0, pf, ts, cb=cb)
-        if init_loss
-            init_u = repeat([u0], length(init_ts))
-            push!(trajs, [vcat(init_ts, sol.t), vcat(init_u, sol.u)])
-        else
-            push!(trajs, [sol.t, sol.u])
-        end
+        init_u = repeat([u0], length(init_ts))
+        push!(trajs, [vcat(init_ts, sol.t), vcat(init_u, sol.u)])
     end
 
     data = []
-    Δtdata = 1
-    indices_v_only = sort(union(map(d->findfirst(isequal(d), lags), vlags),0))
-    indices_f_only = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
+    Δtdata = 3
     for traj in trajs
-        if init_loss
-            for i in 1:Δtdata:length(traj[1])-length(lags)
-                t = traj[1][length(lags) + i]
-                xt = vcat(traj[2][length(lags) + i .- indices_f_only]...)
-                yt = vcat(traj[2][length(lags) + i .- indices_v_only]...)
-                push!(data, (t, xt, yt))
-            end
-        else
-            for i in length(lags)+1:Δtdata:length(traj[1])
-                t = traj[1][i]
-                xt = vcat(traj[2][i .- indices_f_only]...)
-                yt = vcat(traj[2][i .- indices_v_only]...)
-                push!(data, (t, xt, yt))
-            end
+        for i in 1:Δtdata:length(traj[1])-length(init_ts)
+            t = traj[1][length(init_ts) + i]
+            xt = vcat(traj[2][length(init_ts) + i .- Array(0:2*length(vlags))]...)
+            # push!(data, (t, xt))
+            push!(data, (t, randn(82)))
         end
     end
     train_loader = DataLoader(data, batchsize=batch_size, shuffle=shuffle)
     return train_loader
 end
+
+loader = generate_data(pf, 32, 4)
 
 # # define loss function
 # loss = (x,y) -> (x-y)'*(x-y)/length(t)
@@ -188,9 +181,9 @@ function train!(pf, pv, opt_f, opt_v, iter, batch)
     @time begin
         dldpf = zero(pf)
         dldpv = zero(pv)
-        for (_, xt, yt) in batch
-            dldpf += Zygote.gradient(pf->true_loss_nn(xt, yt, pf, pv, model), pf)[1]
-            dldpv += Zygote.gradient(pv->true_loss_nn(xt, yt, pf, pv, model), pv)[1]
+        for (_, xt) in batch
+            dldpf += Zygote.gradient(pf->krasovskii_loss(model, xt, f_mask, v_mask, pf, pv), pf)[1]
+            dldpv += Zygote.gradient(pv->krasovskii_loss(model, xt, f_mask, v_mask, pf, pv), pv)[1]
         end
         Flux.Optimise.update!(opt_f, pf, dldpf)
         Flux.Optimise.update!(opt_v, pv, dldpv)
@@ -209,13 +202,18 @@ end
     lrsf = repeat([5e-3],nepisodes)
     # lrsf = repeat([0.0],nepisodes)
     lrsv = repeat([5e-3],nepisodes)
+    batch_size = 32
+    nbatches = 2
+    # nbatches = "all"
+    ntrajs = 10
+    train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
     for episode in 1:nepisodes
-        batch_size = 64
-        nbatches = 100
+        batch_size = 32
+        nbatches = 2
         # nbatches = "all"
-        ntrajs = 4
+        ntrajs = 10
         batch_idx = 1
-        train_loader = generate_data(pf, batch_size, ntrajs,shuffle=true)
+        # train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
         for batch in train_loader
             println("------------")
             println("episode: ", episode, ", batch_idx: ", batch_idx)
@@ -224,18 +222,18 @@ end
             train!(pf,pv, opt_f, opt_v, 3*(episode-1) + batch_idx, batch)
 
             # plot Lyapunov function contout lines
-            if batch_idx % 1 == 0
-                xs = LinRange(-1, 1, 100)
-                ys = LinRange(-1, 1, 100)
-                zs = [rev(pv)([x,y])[1] for x in xs, y in ys]
-                display(CairoMakie.contour(xs, ys, zs; levels=20))
-            end
+            # if batch_idx % 1 == 0
+            #     xs = LinRange(-1, 1, 100)
+            #     ys = LinRange(-1, 1, 100)
+            #     zs = [rev(pv)([x,y])[1] for x in xs, y in ys]
+            #     display(CairoMakie.contour(xs, ys, zs; levels=20))
+            # end
             # debugging
             # append!(lyapunovgs, sum(abs,p[1:1186]))
             in_batch_loss = 0.0
             max_loss = 0.0
-            for (_, xt, yt) in batch
-                l = true_loss_nn(xt,yt, pf,pv,model)
+            for (_, xt) in batch
+                l = krasovskii_loss(model, xt, f_mask, v_mask, pf, pv)
                 in_batch_loss += l
                 max_loss = maximum([max_loss, l])
             end

@@ -258,15 +258,12 @@ function true_loss_nn(xt::AbstractArray, yt::AbstractArray, p::AbstractArray, q:
     #     raz_fac = raz_fac * heaviside(m.β*v[1] - m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1])
     # end
 
-    past_vs = []
-    for i in 1:length(m.vlags)
-        push!(past_vs, m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1])
-    end
+    past_vs = map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
     vmax = maximum(past_vs)
-    raz_fac = heaviside(m.β*v[1] - vmax))
+    raz_fac = heaviside(m.β*v[1] - vmax)
 
     # return relu(vx'*m.re_f(p)(xt) + m.α * v) * raz_fac
-    return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac / v[1]
+    return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac / (v[1] + 1e-3)
     # return leakyrelu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac
     # return relu(vx'*m.re_f(p)(xt) + m.α * v) * raz_fac
 end
