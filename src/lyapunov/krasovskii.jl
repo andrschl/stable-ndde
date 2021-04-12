@@ -1,5 +1,4 @@
-
-# Krasovskii inspired Lyapunov function candidate and loss
+# Krasovskii inspired Lyapunov functional candidate and loss
 
 ################################################################################
 # some helper functions
@@ -78,28 +77,6 @@ end
     z = m.act.(g - g0) .+ m.eps * x'*x
     return z
 end
-# function forwardgrad(m::Lyapunov, x::AbstractArray)
-#     # inlayer
-#     W0, b0 = m.icnn.InLayer.W, m.icnn.InLayer.b
-#     y0 = W0*x+b0
-#     z1 = m.act.(y0)
-#     dz1dx = adjoint(m.act).(y0) .* W0
-#     # hlayer1
-#     W1,U1,b1 = m.icnn.HLayer1.W,softplus.(m.icnn.HLayer1.U),m.icnn.HLayer1.b
-#     y1 = U1*z1 + W1*x + b1
-#     z2 = m.act.(y1)
-#     dz2dx = adjoint(m.act).(y1) .* (U1*dz1dx + W1)
-#     # hlayer2
-#     W2,U2,b2 = m.icnn.HLayer2.W,softplus.(m.icnn.HLayer2.U),m.icnn.HLayer2.b
-#     y2 = U2*z2 + W2*x + b2
-#     z3 = m.act.(y2)
-#     dz3dx = adjoint(m.act).(y2) .* (U2*dz2dx + W2)
-#     # output
-#     yout = z3 - m.icnn(zero(x))
-#     v = m.act.(yout) .+ m.eps * x'*x
-#     vx = (adjoint(m.act).(yout) .* dz3dx)[1,:]  + 2*m.eps*x
-#     return v, vx
-# end
 
 function forwardgrad(m::Lyapunov, x::AbstractArray)
     # inlayer
@@ -196,10 +173,6 @@ end
     v_max = max(v_list)
     raz_fac = heaviside(m.β*v[1] - v_max)
 
-    # raz_fac = 1.0
-    # for i in 1:nvdelays
-    #     raz_fac = raz_fac * heaviside(m.β*v[1] - m.re_v(q)(yt[i*data_dim + 1:(i+1)*data_dim])[1])
-    # end
     return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac
 end
 
