@@ -31,8 +31,9 @@ Flux.@functor ICNNLayer
 ICNNLayer(z_in::Integer, x_in::Integer, out::Integer, activation) =
     ICNNLayer(randn(out, x_in), randn(out, z_in), randn(out), activation)
 # forward pass
-(m::ICNNLayer)(z::AbstractArray, x::AbstractArray) = m.act.(m.W*x + softplus.(m.U)*z + m.b)
-
+(m::ICNNLayer)(z::AbstractArray, x::AbstractArray) = begin
+    m.act.(m.W*x .+ softplus.(m.U)*z .+ m.b)
+end
 # ICNN
 struct ICNN{S,T,U}
     InLayer::S
@@ -75,7 +76,7 @@ end
 (m::Lyapunov)(x::AbstractArray) = begin
     g = m.icnn(x)
     g0 = m.icnn(zero(x))
-    z = m.act.(g - g0) .+ m.eps * x'*x
+    z = m.act.(g - g0) .+ m.eps * dot.(eachcol(x),eachcol(x))
     return z
 end
 
@@ -100,6 +101,38 @@ function forwardgrad(m::Lyapunov, x::AbstractArray)
     yout = z3 - m.icnn(zero(x))
     v = m.act.(yout) .+ m.eps * x'*x
     vx = (adjoint(m.act).(yout) .* dz3dx)[1,:]  + 2*m.eps*x
+    return v, vx
+end
+
+function forwardgrad_batched(m::Lyapunov, x::AbstractArray)
+    # inlayer
+    W0 = m.icnn.InLayer.weight
+    b0 = m.icnn.InLayer.bias
+    y0 = W0*x.+b0
+    z1 = m.act.(y0)
+    a1 = adjoint(m.act).(y0)
+    a1 = reshape(a1, size(a1, 1), 1, size(a1, 2))
+    dz1dx = a1 .* W0
+    # hlayer1
+    W1,U1,b1 = m.icnn.HLayer1.W,softplus.(m.icnn.HLayer1.U),m.icnn.HLayer1.b
+    y1 = U1*z1 .+ W1*x .+ b1
+    z2 = m.act.(y1)
+    a2 = adjoint(m.act).(y1)
+    a2 = reshape(a2, size(a2, 1), 1, size(a2, 2))
+    dz2dx = a2 .* (batched_mul(U1, dz1dx) .+ W1)
+    # hlayer2
+    W2,U2,b2 = m.icnn.HLayer2.W,softplus.(m.icnn.HLayer2.U),m.icnn.HLayer2.b
+    y2 = U2*z2 .+ W2*x .+ b2
+    z3 = m.act.(y2)
+    a3 = adjoint(m.act).(y2)
+    a3 = reshape(a3, size(a3, 1), 1, size(a3, 2))
+    dz3dx = a3 .* (batched_mul(U2, dz2dx) .+ W2)
+    # output
+    yout = z3 - m.icnn(zero(x))
+    v = m.act.(yout) .+ m.eps * dot.(eachcol(x),eachcol(x))
+    a4 = adjoint(m.act).(yout)
+    a4 = reshape(a4, size(a4, 1), 1, size(a4, 2))
+    vx = (a4 .* dz3dx)[1,:,:]  .+ 2*m.eps*x
     return v, vx
 end
 
@@ -225,8 +258,20 @@ end
 
 
 function true_loss_nn(xt::AbstractArray, yt::AbstractArray, p::AbstractArray, q::AbstractArray, m::StableDynamicsSoft)
-    x = xt[1:m.data_dim]
-    v, vx = forwardgrad(m.re_v(q), x)
+    if length(size(xt)) == 2
+        x = xt[1:m.data_dim,:]
+        v, vx = forwardgrad_batched(m.re_v(q), x)
+        past_vs = vcat(map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim,:]), Array(1:length(m.vlags)))...)
+        vmax = maximum(past_vs, dims=1)
+        raz_fac = heaviside.(m.β*v - vmax)
+        return relu.(dot.(eachcol(vx), eachcol(m.re_f(p)(xt))) + m.α * v[1,:]) .* raz_fac[1,:] ./ (v[1,:] .+ 1e-3)
+    else
+        x = xt[1:m.data_dim]
+        v, vx = forwardgrad(m.re_v(q), x)
+        past_vs = map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
+        vmax = maximum(past_vs)
+        raz_fac = heaviside(m.β*v[1] - vmax)
+    end
     # v,vx = x'*x, 2*x
     # v  = m.re_v(q)(x)
     # vx = dVQuadratic(m.re_v(q),x)
@@ -236,12 +281,18 @@ function true_loss_nn(xt::AbstractArray, yt::AbstractArray, p::AbstractArray, q:
     #     raz_fac = raz_fac * heaviside(m.β*v[1] - m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1])
     # end
 
-    past_vs = map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
-    vmax = maximum(past_vs)
-    raz_fac = heaviside(m.β*v[1] - vmax)
 
     # return relu(vx'*m.re_f(p)(xt) + m.α * v) * raz_fac
     return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac / (v[1] + 1e-3)
     # return leakyrelu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac
     # return relu(vx'*m.re_f(p)(xt) + m.α * v) * raz_fac
 end
+
+function myfunc(x::Array{T,2}) where {T<:Real}
+    println("2-dim")
+end
+function myfunc(x::Array{T,1}) where {T<:Real}
+        println("1-dim")
+end
+
+myfunc(ones(Float64,2))

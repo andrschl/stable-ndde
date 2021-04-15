@@ -1,4 +1,4 @@
-include("import.jl")
+include("../util/import.jl")
 using Symbolics, ModelingToolkit, DifferentialEquations
 using Latexify, Plots
 
@@ -37,59 +37,10 @@ end
 ## Define symbolic variables
 n = 3
 @variables t θ[1:n](t) ω[1:n](t)
-@parameters g l[1:n] m[1:n]
+@parameters g l m k
 
 ## Define Lagrangian
-function L(ω, θ, (g, l, m), t)
-    # Moments of inertia
-    J  = m .* l.^2 /12
-
-    # Define vertical positions
-    y = vcat([l[1] * cos(θ[1]) / 2], map(i -> sum(map(j -> l[j]*cos(θ[j]), 1:i-1)) + l[i] * cos(θ[i]) / 2, 2:n))
-
-    # Define velocities
-    vx = vcat([l[1] * cos(θ[1]) * ω[1]/ 2], map(i -> sum(map(j -> l[j]*cos(θ[j])*ω[j], 1:i-1)) + l[i] * cos(θ[i]) * ω[i] / 2, 2:n))
-    vy = vcat([-l[1] * sin(θ[1]) * ω[1] / 2], map(i -> sum(map(j -> -l[j]*sin(θ[j])*ω[j], 1:i-1)) - l[i] * sin(θ[i]) * ω[i]  / 2, 2:n))
-
-    # Build Lagrangian
-    V = -sum(m.*y.*g)
-    T = 1/2 * sum(m.*(vx.^2 + vy.^2) + J.*(ω.^2))
-    T - V
-end
-
-# Friction terms
-Q = zero(ω)
-
-# Define ODESystem
-n_pendulum = lagrangian2system(L, ω, θ, [g, l, m], t; Q)
-
-# Initial Conditions
-ic = vcat(
-    ω .=> zeros(n),
-    θ .=> deg2rad.(randn(n)*10)
-    )
-
-# Parameters
-p = Dict([
-    g => 9.806
-    l => repeat([1.0], n)
-    m => repeat([1.0], n)
-])
-
-## Simulation
-prob = ODEProblem(n_pendulum, ic, (0.0, 10), [p...])
-sol = solve(prob, Tsit5())
-Plots.plot(sol)
-
-
-
-## Define symbolic variables
-n = 2
-@variables t θ[1:n](t) ω[1:n](t)
-@parameters g l m
-
-## Define Lagrangian
-function L(ω, θ, (g, l, m), t)
+function L(ω, θ, (g, l, m, k), t)
     # Moments of inertia
     J  = m * l^2 /12
 
@@ -108,9 +59,9 @@ end
 
 # Friction terms
 # Q = zero(ω)
-Q = zero(ω)
+Q = - k .* ω
 # Define ODESystem
-n_pendulum = lagrangian2system(L, ω, θ, [g, l, m], t; Q)
+n_pendulum = lagrangian2system(L, ω, θ, [g, l, m, k], t; Q)
 
 # Initial Conditions
 ic = vcat(
@@ -123,9 +74,68 @@ p = Dict([
     g => 9.806
     l => 1.0
     m => 1.0
+    k => 0.5
 ])
 
 ## Simulation
 prob = ODEProblem(n_pendulum, ic, (0.0, 10.0), [p...])
 sol = solve(prob, Tsit5())
 Plots.plot(sol)
+
+##create data set
+T_train = 10.0
+T_test = 20.0
+data_size = 200
+
+t_train = Array(LinRange(0.0, T_train, data_size))
+
+X_train = solve(prob, Tsit5(), saveat=t_train)
+prob
+remake(prob, u0=randn(6))
+
+# ## Define symbolic variables
+# n = 1
+# @variables t θ[1:n](t) ω[1:n](t)
+# @parameters g l[1:n] m[1:n]
+#
+# ## Define Lagrangian
+# function L(ω, θ, (g, l, m), t)
+#     # Moments of inertia
+#     J  = m .* l.^2 /12
+#
+#     # Define vertical positions
+#     y = vcat([l[1] * cos(θ[1]) / 2], map(i -> sum(map(j -> l[j]*cos(θ[j]), 1:i-1)) + l[i] * cos(θ[i]) / 2, 2:n))
+#
+#     # Define velocities
+#     vx = vcat([l[1] * cos(θ[1]) * ω[1]/ 2], map(i -> sum(map(j -> l[j]*cos(θ[j])*ω[j], 1:i-1)) + l[i] * cos(θ[i]) * ω[i] / 2, 2:n))
+#     vy = vcat([-l[1] * sin(θ[1]) * ω[1] / 2], map(i -> sum(map(j -> -l[j]*sin(θ[j])*ω[j], 1:i-1)) - l[i] * sin(θ[i]) * ω[i]  / 2, 2:n))
+#
+#     # Build Lagrangian
+#     V = -sum(m.*y.*g)
+#     T = 1/2 * sum(m.*(vx.^2 + vy.^2) + J.*(ω.^2))
+#     T - V
+# end
+#
+# # Friction terms
+# Q = zero(ω)
+#
+# # Define ODESystem
+# n_pendulum = lagrangian2system(L, ω, θ, [g, l, m], t; Q)
+#
+# # Initial Conditions
+# ic = vcat(
+#     ω .=> zeros(n),
+#     θ .=> deg2rad.(randn(n)*10)
+#     )
+#
+# # Parameters
+# p = Dict([
+#     g => 9.806
+#     l => repeat([1.0], n)
+#     m => repeat([1.0], n)
+# ])
+#
+# ## Simulation
+# prob = ODEProblem(n_pendulum, ic, (0.0, 10), [p...])
+# sol = solve(prob, Tsit5())
+# Plots.plot(sol)

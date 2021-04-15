@@ -12,8 +12,6 @@ function L((v, ω), (x, θ), (Lₐ, Lₚ, mₖ, mₗ, mₚ, g), t)
     T - V
 end
 
-a = L((v, ω), (x, θ), (Lₐ, Lₚ, mₖ, mₗ, mₚ, g), t)
-
 function lagrangian2system(
         L, q̇, q, p, t;
         Q = zeros(length(q)),
@@ -52,7 +50,8 @@ Q = [F, 0]
 
 # Make equations of motion
 slosh_cart = lagrangian2system(L, [v, ω], [x, θ], [Lₐ, Lₚ, mₖ, mₗ, mₚ, g], t; Q)
-
+slosh_cart.eqs
+slosh_cart.ps
 # Initial Conditions
 ic = [
     θ => deg2rad(10)

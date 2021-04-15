@@ -1,5 +1,5 @@
 # import modules
-include("import.jl")
+include("../util/import.jl")
 include("constants_inverted_pendulum.jl")
 
 
@@ -7,7 +7,7 @@ include("constants_inverted_pendulum.jl")
 # generate dynamics model
 
 # open loop dynamics
-function f_ol(x,u)
+function f_ol(x::Array{T,1},u::Array{T,1}) where {T<:Real}
     l = 0.3
     g = 9.81
     b = 0.0
@@ -17,6 +17,17 @@ function f_ol(x,u)
     dx1 = x2
     dx2 = g/l*sin(x1)-1 /(m*l^2)*(b*x2 + u[1])
     return vcat(dx1,dx2)
+end
+function f_ol(x::Array{T,2},u::Array{T,2}) where {T<:Real}
+    l = 0.3
+    g = 9.81
+    b = 0.0
+    m = 0.2
+    x1 = x[1,:]
+    x2 = x[2,:]
+    dx1 = x2
+    dx2 = g/l*sin.(x1).-1 /(m*l^2)*(b*x2 + u[1,:])
+    return transpose(hcat(dx1,dx2))
 end
 # linear feedback layer
 struct Feedback{S}
@@ -32,8 +43,11 @@ struct F_CL{S}
     u::S
 end
 Flux.@functor F_CL
-(m::F_CL)(xt::AbstractArray) = begin
+(m::F_CL)(xt::Array{T,1}) where {T<:Real} = begin
     return f_ol(xt[1:data_dim], m.u(xt[1+data_dim:end]))
+end
+(m::F_CL)(xt::Array{T,2}) where {T<:Real} = begin
+    return f_ol(xt[1:data_dim,:], m.u(xt[1+data_dim:end,:]))
 end
 # define feedback
 g = Feedback(Array([1.749  1.031 ;]))
@@ -108,6 +122,17 @@ function predict_true_loss(u0,h0,pf,pv,t)
     # return Array(solve(prob, alg, u0=z0, p=p, saveat=[last(t_span)], sensealg=ForwardDiffSensitivity()))[3,1]
 end
 
+function dense_predict_true_loss(u0,h0,pf,pv,t)
+    z0 = Array(vcat(u0, [0]))
+    t_span = (first(t), last(t))
+    p = vcat(pf,pv)
+    prob = DDEProblem(true_lyapunov_ndde_func!, z0, h0, t_span, p=p; constant_lags=sort(union(flags,vlags)))
+    alg = MethodOfSteps(RK4())
+    return solve(prob, alg, u0=z0, p=p, sensealg=ReverseDiffAdjoint(),save_idxs=3, abstol=1e-9,reltol=1e-6)
+    # return Array(solve(prob, alg, u0=z0, p=p, saveat=[last(t_span)], sensealg=ReverseDiffAdjoint()))[3,1]
+    # return Array(solve(prob, alg, u0=z0, p=p, saveat=[last(t_span)], sensealg=ForwardDiffSensitivity()))[3,1]
+end
+
 ################################################################################
 # data generation
 
@@ -177,6 +202,39 @@ end
 
 # # define loss function
 # loss = (x,y) -> (x-y)'*(x-y)/length(t)
+@time begin
+    for i in 1:100
+        xt = randn(4,64)
+        yt = randn(42,64)
+        true_loss_nn(xt, yt, pf, pv, model)
+        Zygote.gradient(pv->sum(true_loss_nn(xt, yt, pf, pv, model)), pv)[1]
+    end
+end
+@time begin
+    for i in 1:100
+        xt = randn(4,64)
+        yt = randn(42,64)
+        for j in 1:length(xt[1,:])
+            x = xt[:,j]
+            y = yt[:,j]
+            true_loss_nn(x, y, pf, pv, model)
+            Zygote.gradient(pv->true_loss_nn(xt[:,j], yt[:,j], pf, pv, model), pv)[1]
+        end
+    end
+end
+xt = randn(4,10)
+yt = randn(42,10)
+loss1 = true_loss_nn(xt, yt, pf, pv, model)
+loss2 = []
+for i in 1:10
+    x = xt[:,i]
+    y = yt[:,i]
+    push!(loss2, true_loss_nn(x, y, pf, pv, model))
+end
+loss2
+
+pv1 = Zygote.gradient(pv->sum(true_loss_nn(xt, yt, pf, pv, model)), pv)[1]
+pv2 = Zygote.gradient(pv->true_loss_nn(xt[:,3], yt[:,3], pf, pv, model), pv)[1]
 
 ################################################################################
 # training
@@ -265,5 +323,6 @@ h0 = (p,t;idxs=nothing) -> u0
 sol = dense_predict(u0, h0, pf, [0.0,3.0])
 display(Plots.plot(sol))
 predict_true_loss(u0,h0,pf,pv,[0.0,3])
-
+loss = dense_predict_true_loss(u0,h0,pf,pv,[0.0,3])
+Plots.plot(loss)
 lags
