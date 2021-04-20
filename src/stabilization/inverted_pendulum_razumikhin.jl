@@ -27,7 +27,7 @@ function f_ol(x::Array{T,2},u::Array{T,2}) where {T<:Real}
     x2 = x[2,:]
     dx1 = x2
     dx2 = g/l*sin.(x1).-1 /(m*l^2)*(b*x2 + u[1,:])
-    return transpose(hcat(dx1,dx2))
+    return permutedims(hcat(dx1,dx2),[2,1])
 end
 # linear feedback layer
 struct Feedback{S}
@@ -63,6 +63,8 @@ include("../lyapunov/razumikhin.jl")
 model_v = Lyapunov(data_dim, act=C2_relu, layer_sizes=[16,16])
 pv,rev = Flux.destructure(model_v)
 pf,ref = Flux.destructure(f_cl)
+pf,ref = Flux.destructure(Chain(Dense(4,10,relu),Dense(10,2,relu)))
+
 
 # initialize helper object
 # model = StableDynamicsSoft(data_dim, ref, rev, pf, pv, flags=flags,vlags=vlags,α=0.1,β=1.0202)
@@ -202,39 +204,48 @@ end
 
 # # define loss function
 # loss = (x,y) -> (x-y)'*(x-y)/length(t)
-@time begin
-    for i in 1:100
-        xt = randn(4,64)
-        yt = randn(42,64)
-        true_loss_nn(xt, yt, pf, pv, model)
-        Zygote.gradient(pv->sum(true_loss_nn(xt, yt, pf, pv, model)), pv)[1]
-    end
-end
-@time begin
-    for i in 1:100
-        xt = randn(4,64)
-        yt = randn(42,64)
-        for j in 1:length(xt[1,:])
-            x = xt[:,j]
-            y = yt[:,j]
-            true_loss_nn(x, y, pf, pv, model)
-            Zygote.gradient(pv->true_loss_nn(xt[:,j], yt[:,j], pf, pv, model), pv)[1]
-        end
-    end
-end
-xt = randn(4,10)
-yt = randn(42,10)
-loss1 = true_loss_nn(xt, yt, pf, pv, model)
-loss2 = []
-for i in 1:10
-    x = xt[:,i]
-    y = yt[:,i]
-    push!(loss2, true_loss_nn(x, y, pf, pv, model))
-end
-loss2
 
-pv1 = Zygote.gradient(pv->sum(true_loss_nn(xt, yt, pf, pv, model)), pv)[1]
-pv2 = Zygote.gradient(pv->true_loss_nn(xt[:,3], yt[:,3], pf, pv, model), pv)[1]
+## DEBUG
+
+# @time begin
+#     for i in 1:100
+#         xt = randn(4,64)
+#         yt = randn(42,64)
+#         true_loss_nn(xt, yt, pf, pv, model)
+#         Zygote.gradient(pv->sum(true_loss_nn(xt, yt, pf, pv, model)), pv)[1]
+#     end
+# end
+# @time begin
+#     for i in 1:100
+#         xt = randn(4,64)
+#         yt = randn(42,64)
+#         for j in 1:length(xt[1,:])
+#             x = xt[:,j]
+#             y = yt[:,j]
+#             true_loss_nn(x, y, pf, pv, model)
+#             Zygote.gradient(pv->true_loss_nn(xt[:,j], yt[:,j], pf, pv, model), pv)[1]
+#         end
+#     end
+# end
+# xt = randn(4,10)
+# yt = randn(42,10)
+# loss1 = true_loss_nn(xt, yt, pf, pv, model)
+# loss2 = []
+# for i in 1:10
+#     x = xt[:,i]
+#     y = yt[:,i]
+#     push!(loss2, true_loss_nn(x, y, pf, pv, model))
+# end
+# loss2
+# model.re_f(model.p)(xt)
+# f_cl(xt)
+# pv1 = ReverseDiff.gradient(pv->true_loss_nn(xt, yt, pf, pv, model)[10], pv)
+# pv2 = ReverseDiff.gradient(pv->true_loss_nn(xt[:,10], yt[:,10], pf, pv, model), pv)
+# forwardgrad_batched(rev(pv), xt[1:data_dim,:])
+# ReverseDiff.gradient(pf->sum(ref(pf)(xt)),pf)
+# Zygote.gradient(pf->sum(ref(pf)(xt)),pf)
+
+##
 
 ################################################################################
 # training

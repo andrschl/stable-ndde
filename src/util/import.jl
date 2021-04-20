@@ -6,5 +6,5 @@ using ModelingToolkit, Symbolics, Latexify
 using Plots, StatsBase
 using Random, Distributions
 using Calculus
-using CairoMakie, ColorSchemes
+using ColorSchemes
 using LinearAlgebra

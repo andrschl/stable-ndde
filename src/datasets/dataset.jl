@@ -98,7 +98,7 @@ function remake!(d::AbstractDataset; kwargs...)
     d.prob = remake(d.prob, tspan=d.tspan, p=d.p)
 end
 # Generate a new data set. Overwrites previous one.
-function gen_dataset!(d::AbstractDataset; alg=Tsit5(), kwargs...)
+function gen_dataset!(d::AbstractDataset; alg=Tsit5(),dense=true, kwargs...)
 
     # change setup
     remake!(d, kwargs...)
@@ -109,36 +109,48 @@ function gen_dataset!(d::AbstractDataset; alg=Tsit5(), kwargs...)
     d.callback = DiscreteCallback(condition, affect!)
 
     # generate trajectories
-    d.trajs = gen_trajs(d; alg=alg)
+    d.trajs = gen_trajs(d; alg=alg, dense=dense)
 end
 
 ## utilities
 
 # helper function to generate trajectories
-function gen_trajs(d::AbstractODEDataset; alg=Tsit5())
+function gen_trajs(d::AbstractODEDataset; alg=Tsit5(), dense=true)
     t = Array(first(d.tspan):d.Δt:last(d.tspan))
     init_t = Array(first(d.tspan)-d.r:d.Δt:first(d.tspan)-d.Δt)
     d.N_hist = length(init_t) + 1
     trajs = []
     for u0 in d.ICs
-        prob = remake(d.prob, u0=u0)
+        prob = remake(d.prob, u0=u0, tspan=d.tspan)
         sol = solve(prob, alg, saveat=t, save_idxs=d.obs_ids, callback=d.callback)
-        init_u = repeat([u0[d.obs_ids]], d.N_hist)
-        push!(trajs, [vcat(init_t, sol.t), vcat(init_u, sol.u)])
+        if dense
+            dense_sol = solve(prob, MethodOfSteps(alg), save_idxs=d.obs_ids, dense=true, callback=d.callback)
+            tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1] ? u0[d.obs_ids] : zero(u0[d.obs_ids]))
+        else
+            tot_sol = nothing
+        end
+        init_u = repeat([u0[d.obs_ids]], d.N_hist-1)
+        push!(trajs, [vcat(init_t, sol.t), vcat(init_u, sol.u), tot_sol])
     end
     trajs
 end
-function gen_trajs(d::AbstractDDEDataset; alg=Tsit5())
+function gen_trajs(d::AbstractDDEDataset; alg=Tsit5(), dense=true)
     t = Array(first(d.tspan):d.Δt:last(d.tspan))
     init_t = Array(first(d.tspan)-d.r:d.Δt:first(d.tspan)-d.Δt)
     d.N_hist = length(init_t) + 1
     trajs = []
     for u0 in d.ICs
         h = (p,t) -> u0
-        prob = remake(d.prob, u0=u0, h0=h0)
+        prob = remake(d.prob, u0=u0, h0=h0, tspan=d.tspan)
         sol = solve(prob, MethodOfSteps(alg), saveat=t, callback=d.callback)
-        init_u = repeat([u0], d.N_hist)
-        push!(trajs, [vcat(init_t, sol.t), vcat(init_u, sol.u)])
+        if dense
+            dense_sol = solve(prob, MethodOfSteps(alg), dense=true, callback=d.callback)
+            tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1]  ? u0 : zero(u0))
+        else
+            tot_sol = nothing
+        end
+        init_u = repeat([u0], d.N_hist-1)
+        push!(trajs, [vcat(init_t, sol.t), vcat(init_u, sol.u), tot_sol])
     end
     trajs
 end
@@ -207,23 +219,54 @@ function Flux.Data._getobs(d::AbstractDataset, ids::Array)
     d[ids]
 end
 
-## Example
-ode_func = (u,p,t)-> u
-prob = ODEProblem(ode_func, zeros(10), (0,1.0))
-df = DDEODEDataset(repeat([randn(10)], 3), (0.0,2.0), 0.1, prob, 0.5, obs_ids=[1,2])
-gen_dataset!(df)
-remake!(df, tspan=(0.0,10.0))
+## NDDE batching
 
-# test batching
-loader = Flux.Data.DataLoader(df, batchsize=5, shuffle=true)
-a = zeros(12,5)
-for (t,u) in loader
-    println(size(t),size(u))
-    global a = u
+# get a batch of NDDE training data
+function get_ndde_batch(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
+    ntrajs = length(d.trajs)
+    data_dim = length(d.trajs[1][2][1])
+    tot_size = length(d) - (batchtime-1)*ntrajs
+    s = sample(Array(1:tot_size), batchsize, replace=false)
+    lengths = map(traj -> length(traj[1])-d.N_hist+1-batchtime+1, d.trajs)
+    cum_lengths = map(n -> sum(lengths[1:n]), 1:length(d.trajs))
+
+    us = zeros(data_dim, batchtime, batchsize)
+    ts = zeros(batchtime, batchsize)
+    traj_ids = []
+
+    for (i, idx) in enumerate(s)
+        traj_idx = findfirst(n -> n>=idx, cum_lengths)
+        in_traj_idx = d.N_hist-1 + (idx - vcat([0],cum_lengths)[traj_idx])
+        us[:, :, i] = hcat(df.trajs[traj_idx][2][in_traj_idx:in_traj_idx+batchtime-1]...)
+        ts[:, i] = df.trajs[traj_idx][1][in_traj_idx:in_traj_idx+batchtime-1]
+        push!(traj_ids, traj_idx)
+    end
+    return ts, us, traj_ids
+end
+function get_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::AbstractArray, df::AbstractDataset)
+    t0 = ts[1,:]
+    return (p, ξ) -> hcat(map(i -> df.trajs[traj_ids[i]][3](ξ + t0[i]), 1:length(t0))...)
+end
+function get_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
+    ts, us, traj_ids = get_ndde_batch(d, batchtime, batchsize)
+    h0 = get_batch_h0(ts, us, traj_ids, d)
+    return ts, us, h0
 end
 
-
-
+## Example DEBUG
+# ode_func = (u,p,t)-> u
+# prob = ODEProblem(ode_func, zeros(10), (0,1.0))
+# df = DDEODEDataset(repeat([randn(10)], 3), (0.0,2.0), 0.1, prob, 0.5, obs_ids=[1,2])
+# gen_dataset!(df)
+# remake!(df, tspan=(0.0,10.0))
+#
+# # test batching
+# loader = Flux.Data.DataLoader(df, batchsize=5, shuffle=true)
+# a = zeros(12,5)
+# for (t,u) in loader
+#     println(size(t),size(u))
+#     global a = u
+# end
 
 
 ## batching with DataLoaders.jl

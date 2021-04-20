@@ -242,7 +242,7 @@ end
             # end
             # debugging
             # append!(lyapunovgs, sum(abs,p[1:1186]))
-            
+
             u0 =  [-1.0, 0.0]
             h0 = (p,t) -> u0
             sol = dense_predict(u0, h0, pf, [0.0,3.0])
