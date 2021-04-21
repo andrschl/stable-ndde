@@ -1,6 +1,10 @@
 ## Load packages
 include("../util/import.jl")
 
+## log path
+logpath = "../../reports/"*splitext(basename(@__FILE__))[1]*Dates.format(now(), "_dd-mm-yy_HH:MM/")
+mkpath(logpath)
+
 ## set seed
 Random.seed!(10)
 rng = MersenneTwister(1234)
@@ -12,10 +16,10 @@ include("../datasets/n_pendulum.jl")
 # initial conditions
 θmax = pi/2
 distr = Uniform(-θmax, θmax)
-ICs = map(i-> vcat(θ.=>rand(rng, distr, N_PENDULUM), ω.=> zeros(N_PENDULUM)), 1:10)
+# ICs = map(i-> vcat(θ.=>rand(rng, distr, N_PENDULUM), ω.=> zeros(N_PENDULUM)), 1:10)
 ICs = map(i-> vcat(zeros(N_PENDULUM), rand(rng, distr, N_PENDULUM)), 1:10)
 
-tspan = (0.0, 10.0)
+tspan = (0.0, 5.0)
 Δt = 0.1
 r = 1.0
 
@@ -90,7 +94,7 @@ end
         batch_t = ts[:,1].-ts[1,1]
         train_step!(batch_u[:,1,:], batch_u, batch_h0, pf, batch_t, model, opt)
 
-        if iter % 1 == 0
+        if iter % 99 == 0
             u_test = hcat(df.trajs[1][2]...)[:, df.N_hist:end]
             h0_test = (p,t)->df.trajs[1][3](t)
             t_test = df.trajs[1][1][df.N_hist:end]
@@ -104,8 +108,7 @@ end
     end
 end
 
-
-## Evaluate on some trajectories
+mkpath(logpath*"figures/")
 
 u_test = hcat(df.trajs[7][2]...)[:, df.N_hist:end]
 h0_test = (p,t)->df.trajs[7][3](t)
@@ -115,55 +118,73 @@ pl = plot(test_sol, xlims=(0.0,10.0))
 scatter!(pl, t_test, u_test[1,:], label="θ_true1")
 scatter!(pl, t_test, u_test[2,:], label="θ_true2")
 scatter!(pl, t_test, u_test[3,:], label="θ_true3")
+savefig(pl, logpath*"figures/"*"train7.png")
 
-# # save params
-# dir_name = "/home/andrschl/Documents/MA/stable-time-delay-systems/checkpoints/"
-# using BSON: @save
-# filename = dir_name * "weights.bson"
-# @save filename pf
-#
+## Evaluate on some trajectories
+ICs_test = map(i-> vcat(zeros(N_PENDULUM), rand(rng, distr, N_PENDULUM)), 1:3)
+tspan_test = (0.0, 30.0)
+Δt = 0.1
+r = 1.0
+df_test = DDEODEDataset(ICs_test, tspan_test, Δt, pendulum_prob, r; obs_ids=Array(N_PENDULUM+1:2*N_PENDULUM))
+gen_dataset!(df_test)
+u_test = hcat(df_test.trajs[1][2]...)[:, df_test.N_hist:end]
+h0_test = (p,t)->df_test.trajs[1][3](t)
+t_test = df_test.trajs[1][1][df_test.N_hist:end]
+test_sol = dense_predict_ndde(u_test[:,1], h0_test, tspan_test, pf, model)
+pl = plot(test_sol, xlims=tspan_test)
+scatter!(pl, t_test, u_test[1,:], label="θ_true1")
+scatter!(pl, t_test, u_test[2,:], label="θ_true2")
+scatter!(pl, t_test, u_test[3,:], label="θ_true3")
+savefig(pl, logpath*"figures/"*"generalization.png")
+
+# save params
+using BSON: @save
+filename = logpath * "weights.bson"
+@save filename pf
+
+
 # using BSON: @load
-# load_dir ="/home/andrschl/Documents/MA/node_julia/reports/oscillator_node_comparison/ndde_cos/2020-12-25T23:48:03.224"
+# load_dir ="/home/andrschl/Documents/MA/stable-time-delay-systems/checkpoints/"
 # filename = load_dir * "/weights.bson"
-# @load filename p
+# @load filename pf
 
 
-# test to DEBUG
-u_test = hcat(df.trajs[1][2]...)[:, df.N_hist:end]
-h0_test = (p,t)->df.trajs[1][3](t)
-t_test = df.trajs[1][1][df.N_hist:end]
-tspan_test= (0.0,10.0)
-test_pred = predict_ndde(u_test[:,1],h0_test, t_test,pf, model)
-
-
-pl = Plots.plot(t_test, Base.getindex.(test_pred.u,1), xlims=(-1,10))
-Plots.plot!(pl,t->h0_test(nothing,t)[1])
-Plots.scatter!(pl, t_test, u_test[1,:])
-Plots.plot!(t_test, Base.getindex.(test_pred.u,2), xlims=(-1,10))
-Plots.plot!(pl,t->h0_test(nothing,t)[2])
-Plots.scatter!(pl, t_test, u_test[2,:])
-Plots.plot(dense_predict_ndde(u_test[:,1],h0_test, tspan_test,pf, model), xlims=(-1,10))
-
-ts, batch_u, batch_h0 = get_ndde_batch_and_h0(df, batchtime, batchsize)
-batch_t = ts[:,1].-ts[1,1]
-batch_pred_u = predict_ndde(batch_u[:,1,:],batch_h0, batch_t,pf, model)
-predict_LS_loss(batch_u[:,1,:], batch_h0, batch_t, batch_u, pf, model, N=batchtime*batchsize)[1]
-Zygote.gradient(batch_u->predict_LS_loss(batch_u[:,1,:], batch_h0, batch_t, batch_u, pf, model, N=batchtime*batchsize)[1],batch_u)
-Zygote.gradient(u_test->predict_LS_loss(u_test[:,1], h0_test, t_test, u_test, pf, model, N=length(t_test))[1],u_test)
-
-ps = Flux.params(pf)
-gs = gradient(ps) do
-    pred_u = predict_ndde(batch_u[:,1,:], batch_h0, batch_t, pf, model)
-    println(size(pred_u))
-    return test_loss(pred_u, batch_u)
-end
-gs[pf]
-
-ps = Flux.params(pf)
-gs = Zygote.gradient(ps) do
-    pred_u = predict_ndde(u_test[:,1], h0_test, t_test, pf, model)
-    println(size(pred_u))
-    return test_loss(pred_u, u_test)
-end
-gs[pf]
-predict_ndde(u_test[:,1], h0_test, t_test, pf)
+# # test to DEBUG
+# u_test = hcat(df.trajs[1][2]...)[:, df.N_hist:end]
+# h0_test = (p,t)->df.trajs[1][3](t)
+# t_test = df.trajs[1][1][df.N_hist:end]
+# tspan_test= (0.0,10.0)
+# test_pred = predict_ndde(u_test[:,1],h0_test, t_test,pf, model)
+#
+#
+# pl = Plots.plot(t_test, Base.getindex.(test_pred.u,1), xlims=(-1,10))
+# Plots.plot!(pl,t->h0_test(nothing,t)[1])
+# Plots.scatter!(pl, t_test, u_test[1,:])
+# Plots.plot!(t_test, Base.getindex.(test_pred.u,2), xlims=(-1,10))
+# Plots.plot!(pl,t->h0_test(nothing,t)[2])
+# Plots.scatter!(pl, t_test, u_test[2,:])
+# Plots.plot(dense_predict_ndde(u_test[:,1],h0_test, tspan_test,pf, model), xlims=(-1,10))
+#
+# ts, batch_u, batch_h0 = get_ndde_batch_and_h0(df, batchtime, batchsize)
+# batch_t = ts[:,1].-ts[1,1]
+# batch_pred_u = predict_ndde(batch_u[:,1,:],batch_h0, batch_t,pf, model)
+# predict_LS_loss(batch_u[:,1,:], batch_h0, batch_t, batch_u, pf, model, N=batchtime*batchsize)[1]
+# Zygote.gradient(batch_u->predict_LS_loss(batch_u[:,1,:], batch_h0, batch_t, batch_u, pf, model, N=batchtime*batchsize)[1],batch_u)
+# Zygote.gradient(u_test->predict_LS_loss(u_test[:,1], h0_test, t_test, u_test, pf, model, N=length(t_test))[1],u_test)
+#
+# ps = Flux.params(pf)
+# gs = gradient(ps) do
+#     pred_u = predict_ndde(batch_u[:,1,:], batch_h0, batch_t, pf, model)
+#     println(size(pred_u))
+#     return test_loss(pred_u, batch_u)
+# end
+# gs[pf]
+#
+# ps = Flux.params(pf)
+# gs = Zygote.gradient(ps) do
+#     pred_u = predict_ndde(u_test[:,1], h0_test, t_test, pf, model)
+#     println(size(pred_u))
+#     return test_loss(pred_u, u_test)
+# end
+# gs[pf]
+# predict_ndde(u_test[:,1], h0_test, t_test, pf)

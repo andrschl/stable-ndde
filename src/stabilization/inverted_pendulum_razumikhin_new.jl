@@ -1,11 +1,10 @@
-## Load packages
+# import modules
 include("../util/import.jl")
+include("constants_inverted_pendulum.jl")
 
-## set seed
-Random.seed!(10)
-rng = MersenneTwister(1234)
 
-## generate dynamics model
+################################################################################
+# generate dynamics model
 
 # open loop dynamics
 function f_ol(x::Array{T,1},u::Array{T,1}) where {T<:Real}

@@ -6,8 +6,8 @@ abstract type AbstractModel end
 abstract type AbstractNDEModel <: AbstractModel end
 abstract type AbstractNDDEModel <: AbstractNDEModel end
 
+## TODO Neural ODE Model
 mutable struct NODE <: AbstractNDEModel
-
 
 end
 
