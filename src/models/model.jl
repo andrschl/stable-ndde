@@ -140,9 +140,9 @@ function LS_loss(x,y)
     # dot(x-y, x-y)
     sum(abs2, x-y)
 end
-function predict_LS_loss(u0::AbstractArray, h0::Function, t::AbstractArray, u_data::AbstractArray, pf::AbstractArray, m::AbstractNDDEModel; N=1)
+function predict_ndde_loss(u0::AbstractArray, h0::Function, t::AbstractArray, u_data::AbstractArray, pf::AbstractArray, m::AbstractNDDEModel; loss_func=LS_loss, N=1)
     u_pred = predict_ndde(u0, h0, t, pf, m)
-    loss = LS_loss(u_pred, u_data) / N
+    loss = loss_func(u_pred, u_data) / N
     return loss, u_pred
 end
 

@@ -237,15 +237,15 @@ function get_ndde_batch(d::AbstractDataset, batchtime::Integer, batchsize::Integ
     for (i, idx) in enumerate(s)
         traj_idx = findfirst(n -> n>=idx, cum_lengths)
         in_traj_idx = d.N_hist-1 + (idx - vcat([0],cum_lengths)[traj_idx])
-        us[:, :, i] = hcat(df.trajs[traj_idx][2][in_traj_idx:in_traj_idx+batchtime-1]...)
-        ts[:, i] = df.trajs[traj_idx][1][in_traj_idx:in_traj_idx+batchtime-1]
+        us[:, :, i] = hcat(d.trajs[traj_idx][2][in_traj_idx:in_traj_idx+batchtime-1]...)
+        ts[:, i] = d.trajs[traj_idx][1][in_traj_idx:in_traj_idx+batchtime-1]
         push!(traj_ids, traj_idx)
     end
     return ts, us, traj_ids
 end
-function get_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::AbstractArray, df::AbstractDataset)
+function get_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::AbstractArray, d::AbstractDataset)
     t0 = ts[1,:]
-    return (p, ξ) -> hcat(map(i -> df.trajs[traj_ids[i]][3](ξ + t0[i]), 1:length(t0))...)
+    return (p, ξ) -> hcat(map(i -> d.trajs[traj_ids[i]][3](ξ + t0[i]), 1:length(t0))...)
 end
 function get_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
     ts, us, traj_ids = get_ndde_batch(d, batchtime, batchsize)

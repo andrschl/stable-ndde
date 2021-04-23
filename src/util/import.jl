@@ -8,3 +8,7 @@ using Random, Distributions
 using Calculus, Dates
 using ColorSchemes
 using LinearAlgebra
+using PyCall
+if !params["server"]
+    using Plots, Latexify, ColorSchemes
+end
