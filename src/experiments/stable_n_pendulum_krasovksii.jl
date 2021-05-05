@@ -46,7 +46,7 @@ include("../util/import.jl")
 
 ## log path
 current_time = Dates.format(now(), "_dd-mm-yy_HH:MM/")
-runname = string(run_dict["npendulum"]) * "-pendulum_raz"
+runname = string(run_dict["npendulum"]) * "-pendulum_kras"
 logpath = "../../reports/"*splitext(basename(@__FILE__))[1]*current_time
 mkpath(logpath)
 wandb = pyimport("wandb")
@@ -87,8 +87,8 @@ batchsize = run_dict["batchsize"]
 include("../models/model.jl")
 data_dim = N_PENDULUM
 flags = Array(Δt:Δt:r)
-vlags = Array(Δtv:Δtv:rv) # not used here
-model = RazNDDE(data_dim; flags=flags, vlags=vlags, α=0.2, q=1.2)
+vlags = flags # not used here
+model = KrasNDDE(data_dim; flags=flags, vlags=vlags, α=0.2, q=1.2)
 
 ## Define model dataset for lyapunov training
 lyap_prob = DDEProblem(model.ndde_func!, ICs_train_lyap[1], (p,t)->ICs_train_lyap[1], train_lyap_tspan, constant_lags=flags)
@@ -110,15 +110,16 @@ include("../training/training_util.jl")
     for (lr, iter) in lr_schedule
         println("==============")
         println("iter: ", iter)
-        # ndde train step
+        # get ndde batch
         optf = ADAM(lr)
         optv=optf
         ts, batch_u, batch_h0 = get_ndde_batch_and_h0(df_train, batchtime, batchsize)
         batch_t = ts[:,1].-ts[1,1]
-        # lyapunov train step
+        # get lyapunov data
         gen_dataset!(df_model, p=pf)
         lyap_loader = Flux.Data.DataLoader(df_model, batchsize=run_dict["batchsize_lyap"], shuffle=true)
-        stable_ndde_train_step!(batch_u[:,1,:], batch_u, batch_h0, pf, pv, batch_t, model, optf, optv, run_dict["c"], lyap_loader)
+        # combined train step
+        kras_stable_ndde_train_step!(batch_u[:,1,:], batch_u, batch_h0, pf, pv, batch_t, model, optf, optv, run_dict["c"], lyap_loader)
         # test evaluation
         if iter % run_dict["test_eval"] == 0
             # log train fit first trajectory

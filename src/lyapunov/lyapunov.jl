@@ -85,10 +85,10 @@ end
 
 function forwardgrad(m::Lyapunov, x::AbstractArray)
     # inlayer
-    W0 = m.icnn.InLayer.weight
-    b0 = m.icnn.InLayer.bias
-    # W0 = m.icnn.InLayer.W
-    # b0 = m.icnn.InLayer.b
+    # W0 = m.icnn.InLayer.weight
+    # b0 = m.icnn.InLayer.bias
+    W0 = m.icnn.InLayer.W
+    b0 = m.icnn.InLayer.b
     y0 = W0*x+b0
     z1 = m.act.(y0)
     # dz1dx = adjoint(m.act).(y0) .* W0
@@ -117,10 +117,10 @@ end
 
 function forwardgrad_batched(m::Lyapunov, x::AbstractArray)
     # inlayer
-    W0 = m.icnn.InLayer.weight
-    b0 = m.icnn.InLayer.bias
-    # W0 = m.icnn.InLayer.W
-    # b0 = m.icnn.InLayer.b
+    # W0 = m.icnn.InLayer.weight
+    # b0 = m.icnn.InLayer.bias
+    W0 = m.icnn.InLayer.W
+    b0 = m.icnn.InLayer.b
     y0 = W0*x.+b0
     z1 = m.act.(y0)
     # a1 = adjoint(m.act).(y0)
@@ -142,6 +142,7 @@ function forwardgrad_batched(m::Lyapunov, x::AbstractArray)
     # a3 = adjoint(m.act).(y2)
     a3 = dC2_relu.(y2)
     a3 = reshape(a3, size(a3, 1), 1, size(a3, 2))
+    # println(size(U2), size(dz2dx))
     dz3dx = a3 .* (batched_mul(U2, dz2dx) .+ W2)
     # output
     yout = z3 - m.icnn(zero(x))

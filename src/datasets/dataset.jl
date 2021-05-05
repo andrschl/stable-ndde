@@ -7,11 +7,13 @@ abstract type AbstractDDEDataset <: AbstractDataset end
 abstract type AbstractODEDataset <: AbstractDataset end
 
 # type for dataset for DDE model based on DDE ground truth
+# for now hard-coded with constant initial histories
 mutable struct DDEDDEDataset <: AbstractDDEDataset
     trajs
+    noisy_trajs
     state_dim::Int64
     obs_ids::Array{Int64,1}
-    ICs
+    h0s
     tspan::Tuple{Float64,Float64}
     Δt::Float64
     N::Int64
@@ -23,12 +25,24 @@ mutable struct DDEDDEDataset <: AbstractDDEDataset
     constant_lags::Array{Float64,1}
     r::Float64
 end
-# type for dataset for ODE model based on DDE ground truth
+DDEDDEDataset(h0s, tspan, Δt, prob, r, constant_lags; obs_ids=Array(1:length(h0s[1](prob.p, tspan[1]))), umax=100.0) = begin
+    trajs = []
+    state_dim = length(h0s[1](prob.p, first(tspan)))
+    N = Int(floor((last(tspan) - first(tspan))/Δt)) + 1
+    N_hist = Int(r/Δt) + 1
+    p = prob.p
+    callback = nothing
+    @assert r >= constant_lags[end]
+    DDEDDEDataset(trajs, [], 0.0, state_dim, obs_ids, h0s, tspan, Δt, N, N_hist, p, prob, umax, callback, constant_lags, r)
+end
+# type for dataset for ODE model based on DDE ground truth -> not needed at the moment
 mutable struct ODEDDEDataset <: AbstractDDEDataset
     trajs
+    noisy_trajs
+    σ::Float64
     state_dim::Int64
     obs_ids::Array{Int64,1}
-    ICs
+    h0s
     tspan::Tuple{Float64,Float64}
     Δt::Float64
     N::Int64
@@ -43,6 +57,8 @@ end
 # type for dataset for DDE model based on ODE ground truth
 mutable struct DDEODEDataset <: AbstractODEDataset
     trajs
+    noisy_trajs
+    σ::Float64
     state_dim::Int64
     obs_ids::Array{Int64,1}
     ICs
@@ -55,20 +71,23 @@ mutable struct DDEODEDataset <: AbstractODEDataset
     umax::Float64
     callback
     r::Float64
+    const_init::Bool
 end
-DDEODEDataset(ICs, tspan, Δt, prob, r; obs_ids=1:length(ICs[1]), umax=100.0) = begin
+DDEODEDataset(ICs, tspan, Δt, prob, r; obs_ids=1:length(ICs[1]), umax=100.0, const_init=false) = begin
     trajs = []
     state_dim = length(ICs[1])
     N = Int(floor((last(tspan) - first(tspan))/Δt)) + 1
-    N_hist = Int(r/Δt) + 1
+    N_hist = Int(floor(r/Δt)) + 1
     p = prob.p
     callback = nothing
-    DDEODEDataset(trajs, state_dim, obs_ids, ICs, tspan, Δt, N, N_hist, p, prob, umax, callback, r)
+    DDEODEDataset(trajs, [], 0.0, state_dim, obs_ids, ICs, tspan, Δt, N, N_hist, p, prob, umax, callback, r, const_init)
 end
 
 # type for dataset for ODE model based on ODE ground truth
 mutable struct ODEODEDataset <: AbstractODEDataset
     trajs
+    noisy_trajs
+    σ::Float64
     state_dim::Int64
     obs_ids::Array{Int64,1}
     ICs
@@ -81,6 +100,7 @@ mutable struct ODEODEDataset <: AbstractODEDataset
     umax::Float64
     callback
     r::Float64
+    const_init::Bool
 end
 
 ## Core functionality:
@@ -101,7 +121,7 @@ end
 function gen_dataset!(d::AbstractDataset; alg=Tsit5(),dense=true, kwargs...)
 
     # change setup
-    remake!(d, kwargs...)
+    remake!(d; kwargs...)
 
     # stopping condition to avoid finite escape
     condition(u,t,integrator) = sum(abs2, u) >= d.umax^2
@@ -111,48 +131,74 @@ function gen_dataset!(d::AbstractDataset; alg=Tsit5(),dense=true, kwargs...)
     # generate trajectories
     d.trajs = gen_trajs(d; alg=alg, dense=dense)
 end
-
+function gen_noise!(d::AbstractDataset, σ::Real)
+    d.σ = σ
+    d.noisy_trajs = []
+    for i in 1:length(d.trajs)
+        t = d.trajs[i][1]
+        u_noisy = map(j -> d.trajs[i][2][j] + σ*randn(length(d.trajs[i][2][1])), 1:length(d.trajs[i][2]))
+        push!(d.noisy_trajs, [t, u_noisy])
+    end
+end
 ## utilities
 
 # helper function to generate trajectories
 function gen_trajs(d::AbstractODEDataset; alg=Tsit5(), dense=true)
     t = Array(first(d.tspan):d.Δt:last(d.tspan))
-    init_t = Array(first(d.tspan)-d.r:d.Δt:first(d.tspan)-d.Δt)
+    init_t = reverse(Array(first(d.tspan)-d.Δt:-d.Δt:first(d.tspan)-d.r))
+    tot_t = vcat(init_t, t)
+    tot_tspan = (t[1]-d.r, t[end])
     d.N_hist = length(init_t) + 1
     trajs = []
-    for u0 in d.ICs
-        prob = remake(d.prob, u0=u0, tspan=d.tspan)
-        sol = solve(prob, alg, saveat=t, save_idxs=d.obs_ids, callback=d.callback)
-        if dense
-            dense_sol = solve(prob, MethodOfSteps(alg), save_idxs=d.obs_ids, dense=true, callback=d.callback)
-            tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1] ? u0[d.obs_ids] : zero(u0[d.obs_ids]))
-        else
-            tot_sol = nothing
+    if d.const_init
+        for u0 in d.ICs
+            prob = remake(d.prob, u0=u0, tspan=d.tspan)
+            sol = solve(prob, alg, p=d.p, saveat=t, save_idxs=d.obs_ids, callback=d.callback)
+            if dense
+                dense_sol = solve(prob, alg, p=d.p, save_idxs=d.obs_ids, dense=true, callback=d.callback)
+                tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1] ? u0[d.obs_ids] : zero(u0[d.obs_ids]))
+            else
+                tot_sol = nothing
+            end
+            init_u = repeat([u0[d.obs_ids]], d.N_hist-1)
+            push!(trajs, [vcat(init_t, sol.t), vcat(init_u, sol.u), tot_sol])
         end
-        init_u = repeat([u0[d.obs_ids]], d.N_hist-1)
-        push!(trajs, [vcat(init_t, sol.t), vcat(init_u, sol.u), tot_sol])
+    else
+        for u0 in d.ICs
+            prob = remake(d.prob, u0=u0, tspan=tot_tspan)
+            sol = solve(prob, alg, p=d.p, saveat=tot_t, save_idxs=d.obs_ids, callback=d.callback)
+            if dense
+                dense_sol = solve(prob, alg, p=d.p, save_idxs=d.obs_ids, dense=true, callback=d.callback)
+                tot_sol = ξ -> ξ>=sol.t[1]-d.r&&ξ<=sol.t[end] ? dense_sol(ξ) : zero(u0[d.obs_ids])
+            else
+                tot_sol = nothing
+            end
+            push!(trajs, [sol.t, sol.u, tot_sol])
+        end
     end
-    trajs
+    return trajs
 end
 function gen_trajs(d::AbstractDDEDataset; alg=Tsit5(), dense=true)
     t = Array(first(d.tspan):d.Δt:last(d.tspan))
-    init_t = Array(first(d.tspan)-d.r:d.Δt:first(d.tspan)-d.Δt)
+    init_t = reverse(Array(first(d.tspan)-d.Δt:-d.Δt:first(d.tspan)-d.r))
+    tot_t = vcat(init_t, t)
+    tot_tspan = (t[1]-d.r, t[end])
     d.N_hist = length(init_t) + 1
     trajs = []
-    for u0 in d.ICs
-        h = (p,t) -> u0
-        prob = remake(d.prob, u0=u0, h0=h0, tspan=d.tspan)
-        sol = solve(prob, MethodOfSteps(alg), saveat=t, callback=d.callback)
+    for h0 in d.h0s
+        u0 = h0(d.p, t[1])
+        prob = remake(d.prob, u0=u0, h0=h0, tspan=d.tspan, constant_lags=d.constant_lags)
+        sol = solve(prob, MethodOfSteps(alg), p=d.p, saveat=t, save_idxs=d.obs_ids, callback=d.callback)
         if dense
-            dense_sol = solve(prob, MethodOfSteps(alg), dense=true, callback=d.callback)
-            tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1]  ? u0 : zero(u0))
+            dense_sol = solve(prob, MethodOfSteps(alg), p=d.p, save_idxs=d.obs_ids, dense=true, callback=d.callback)
+            tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1]&&ξ>=sol.t[1]-r  ? h0(d.p,ξ)[d.obs_ids] : zero(u0[d.obs_ids]))
         else
             tot_sol = nothing
         end
-        init_u = repeat([u0], d.N_hist-1)
-        push!(trajs, [vcat(init_t, sol.t), vcat(init_u, sol.u), tot_sol])
+        init_u = map(ξ -> h0(d.p, ξ), init_t)
+        push!(trajs, [tot_t, vcat(init_u, sol.u), tot_sol])
     end
-    trajs
+    return trajs
 end
 
 ## batching utilities
@@ -250,8 +296,83 @@ end
 function get_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
     ts, us, traj_ids = get_ndde_batch(d, batchtime, batchsize)
     h0 = get_batch_h0(ts, us, traj_ids, d)
-    return ts, us, h0
+    return ts, us, h0, traj_ids
 end
+#TODO finish this...
+function get_noisy_ndde_batch(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
+    ntrajs = length(d.trajs)
+    data_dim = length(d.trajs[1][2][1])
+    tot_size = length(d) - (batchtime-1)*ntrajs
+    s = sample(Array(1:tot_size), batchsize, replace=false)
+    lengths = map(traj -> length(traj[1])-d.N_hist+1-batchtime+1, d.trajs)
+    cum_lengths = map(n -> sum(lengths[1:n]), 1:length(d.trajs))
+
+    us = zeros(data_dim, batchtime, batchsize)
+    ts = zeros(batchtime, batchsize)
+    traj_ids = []
+
+    for (i, idx) in enumerate(s)
+        traj_idx = findfirst(n -> n>=idx, cum_lengths)
+        in_traj_idx = d.N_hist-1 + (idx - vcat([0],cum_lengths)[traj_idx])
+        us[:, :, i] = hcat(d.noisy_trajs[traj_idx][2][in_traj_idx:in_traj_idx+batchtime-1]...)
+        ts[:, i] = d.noisy_trajs[traj_idx][1][in_traj_idx:in_traj_idx+batchtime-1]
+        push!(traj_ids, (traj_idx,in_traj_idx))
+    end
+    return ts, us, traj_ids
+end
+# only working for 1D data currently -> simply add univariate gps for higher dimensions
+# maybe define gps to be zero outside history interval
+function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::AbstractArray, d::AbstractDataset)
+    t0 = ts[1,:]
+    h0s = []
+    for (traj_idx, in_traj_idx) in traj_ids
+
+        t_hist = d.trajs[traj_idx][1][in_traj_idx-d.N_hist+1:in_traj_idx]
+        u_hist = hcat(d.noisy_trajs[traj_idx][2][in_traj_idx-d.N_hist+1:in_traj_idx]...)
+
+        # fit gp
+        # mZero = MeanZero()
+        # kern = SE(0.0,0.0)
+        # logObsNoise = log(d.σ)
+        # gp = GP(Array{Float64}(t_hist), Array{Float64}(u_hist[1,:]), mZero, kern, logObsNoise)
+        # optimize!(gp)
+        # push!(h0s, t -> predict_y(gp, [t])[1])
+
+        f= GP(SqExponentialKernel())
+        fx = f(t_hist, d.σ)
+        p_fx =  posterior(fx, u_hist[1,:])
+        push!(h0s, t -> mean(p_fx([t])))
+    end
+    return (p, ξ) -> hcat(map(i -> h0s[i](ξ + t0[i]), 1:length(t0))...)
+end
+# only working for 1D data currently -> simply add univariate gps for higher dimensions
+# maybe define gps to be zero outside history interval
+function get_noisy_h0(d::AbstractDataset, traj_idx::Integer)
+    t_hist = d.trajs[traj_idx][1][1:d.N_hist]
+    u_hist = hcat(d.noisy_trajs[traj_idx][2][1:d.N_hist]...)
+
+    # fit gp
+    # mZero = MeanZero()
+    # kern = SE(0.0,0.0)
+    # logObsNoise = log(d.σ)
+    # gp = GP(Array{Float64}(t_hist), Array{Float64}(u_hist[1,:]), mZero, kern, logObsNoise)
+    # optimize!(gp)
+
+    f= GP(SqExponentialKernel())
+    fx = f(t_hist, d.σ)
+    p_fx =  posterior(fx, u_hist[1,:])
+
+    # return (p,t) -> predict_y(gp, [t])[1]
+    return (p,t) -> mean(p_fx([t]))
+end
+
+
+function get_noisy_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
+    ts, us, traj_ids = get_noisy_ndde_batch(d, batchtime, batchsize)
+    h0 = get_noisy_batch_h0(ts, us, traj_ids, d)
+    return ts, us, h0, traj_ids
+end
+
 
 ## Example DEBUG
 # ode_func = (u,p,t)-> u

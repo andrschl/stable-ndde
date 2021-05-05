@@ -1,14 +1,10 @@
-cd(@__DIR__)
-using Pkg; Pkg.activate("../../."); Pkg.instantiate(); using Revise
-# using Pkg; Pkg.activate("../../../node_julia/."); Pkg.instantiate(); using Revise
 using Flux, Zygote, DifferentialEquations, DiffEqSensitivity, DataStructures, ReverseDiff
-using ModelingToolkit, Symbolics, Latexify
-using Plots, StatsBase
+# using ModelingToolkit, Symbolics
+using StatsBase
 using Random, Distributions
 using Calculus, Dates
-using ColorSchemes
 using LinearAlgebra
-using PyCall
-if !params["server"]
+if !config["server"]
     using Plots, Latexify, ColorSchemes
 end
+using CSV, DataFrames

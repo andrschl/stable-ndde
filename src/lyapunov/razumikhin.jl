@@ -156,154 +156,154 @@
 #     vx = (a4 .* dz3dx)[1,:,:]  .+ 2*m.eps*x
 #     return v, vx
 # end
-
-################################################################################
-# dynamics
-struct StableDynamics{S, T<:AbstractFloat, U<:AbstractFloat}
-    v::Lyapunov
-    f_hat::S
-    alpha::T
-    nfdelays::Integer
-    nvdelays::Integer
-    p::U
-    data_dim::Integer
-end
-Flux.@functor StableDynamics
-# constructor
-StableDynamics(data_dim; nfdelays=0, nvdelays=0, α=0.01, q=1.0202, act=C2_relu) = begin
-    v = Lyapunov(data_dim, act=act)
-    f_hat = Chain(Dense((data_dim) * (nfdelays + 1), 32, swish),
-               Dense(32, 64, swish),
-               Dense(64, 64, swish),
-               Dense(64, 32, swish),
-               Dense(32, data_dim))
-    StableDynamics(v, f_hat, α, nfdelays, nvdelays, q, data_dim)
-end
-# forward pass
-(m::StableDynamics)(xt::AbstractArray, yt::AbstractArray) = begin
-    data_dim = m.data_dim
-    x = xt[1:data_dim]
-    if x == zero(x)
-        return zero(x)
-    end
-    v, vx = forwardgrad(m.v, x)
-    # razumikhin condition
-    raz_fac = 1.0
-    for i in 1:m.nvdelays
-        # raz_fac = raz_fac * heaviside(m.p*v[1] - m.v(yt[i*data_dim + 1:(i+1)*data_dim])[1])
-        raz_fac = raz_fac * C2_smooth_step(m.p*v[1] - m.v(yt[i*data_dim + 1:(i+1)*data_dim])[1])
-    end
-    # return m.f_hat(xt) - vx * relu(vx'*m.f_hat(xt) + m.alpha * v[1]) / sum(abs2, vx) * raz_fac
-    return m.f_hat(xt) - vx * C2_relu_shifted(vx'*m.f_hat(xt) + m.alpha * v[1]) / sum(abs2, vx) * raz_fac
-end
-
-################################################################################
-# soft stability
-mutable struct StableDynamicsSoft{O, P, Q<:AbstractArray, R<:AbstractArray,
-        S<:AbstractArray, T<:AbstractArray, U<:AbstractFloat,V<:AbstractFloat}
-    re_f::O
-    re_v::P
-    p::Q
-    q::R
-    flags::S
-    vlags::T
-    α::U
-    β::V
-    data_dim::Integer
-    nfparams::Integer
-    nvparams::Integer
-end
-# constructor
-StableDynamicsSoft(data_dim;flags=[],vlags=[], α=0.1, β=1.1, act=C2_relu) = begin
-    nfdelays = length(flags)
-    v = Lyapunov(data_dim, act=act)
-    f = Chain(Dense((data_dim) * (nfdelays + 1), 32, swish),
-               # Dense(32,32,swish),
-               Dense(32, 64, swish),
-               Dense(64, 64, swish),
-               Dense(64, 32, swish),
-               Dense(32, data_dim))
-    q,re_v = Flux.destructure(v)
-    nvparams = length(q)
-    p,re_f = Flux.destructure(f)
-    nfparams = length(p)
-    StableDynamicsSoft(re_f, re_v, p, q, flags, vlags, α, β, data_dim, nfparams, nvparams)
-end
-StableDynamicsSoft(data_dim, p, q;flags=[],vlags=[], α=0.2, β=1.1, act=C2_relu) = begin
-    nfdelays = length(flags)
-    v = Lyapunov(data_dim, act=act)
-    f = Chain(Dense((data_dim) * (nfdelays + 1), 32, swish),
-               # Dense(32,32,swish),
-               Dense(32, 64, swish),
-               Dense(64, 64, swish),
-               Dense(64, 32, swish),
-               Dense(32, data_dim))
-    _,re_v = Flux.destructure(v)
-    nvparams = length(q)
-    _,re_f = Flux.destructure(f)
-    nfparams = length(p)
-    StableDynamicsSoft(re_f, re_v, p, q, flags, vlags, α, β, data_dim, nfparams, nvparams)
-end
-StableDynamicsSoft(data_dim, re_f, re_v, p, q; flags=[],vlags=[], α=0.2, β=1.1, act=C2_relu) = begin
-    nvparams = length(q)
-    nfparams = length(p)
-    StableDynamicsSoft(re_f, re_v, p, q, flags, vlags, α, β, data_dim, nfparams, nvparams)
-end
-
-(m::StableDynamicsSoft)(xt::AbstractArray, yt::AbstractArray, p::AbstractArray, q::AbstractArray) = begin
-    data_dim = m.data_dim
-    nfdelays = length(m.flags)
-    nvdelays = length(m.vlags)
-    x = xt[1:data_dim]
-    if x == zero(x)
-        return zero(x)
-    end
-    v, vx = forwardgrad(m.re_v(q), x)
-
-    # razumikhin condition
-    v_list = []
-    for i in 1:nvdelays
-        push!(v_list, m.re_v(q)(yt[i*data_dim + 1:(i+1)*data_dim])[1])
-    end
-    v_max = max(v_list)
-    raz_fac = heaviside(m.β*v[1] - v_max)
-
-    # raz_fac = 1.0
-    # for i in 1:nvdelays
-    #     raz_fac = raz_fac * heaviside(m.β*v[1] - m.re_v(q)(yt[i*data_dim + 1:(i+1)*data_dim])[1])
-    # end
-    return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac
-end
-
-
-
-
-function true_loss_nn(xt::Array{T,1}, yt::Array{T,1}, p::AbstractArray, q::AbstractArray, m::StableDynamicsSoft) where {T<:Real}
-    x = xt[1:m.data_dim]
-    v, vx = forwardgrad(m.re_v(q), x)
-    past_vs = map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
-    vmax = maximum(past_vs)
-    raz_fac = heaviside(m.β*v[1] - vmax)
-    return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac / (v[1] + 1e-3)
-end
-function true_loss_nn(xt::Array{T,2}, yt::Array{T,2}, p::AbstractArray, q::AbstractArray, m::StableDynamicsSoft) where {T<:Real}
-    x = xt[1:m.data_dim,:]
-    v, vx = forwardgrad_batched(m.re_v(q), x)
-    past_vs = vcat(map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim,:]), Array(1:length(m.vlags)))...)
-    vmax = maximum(past_vs, dims=1)
-    # println(size(vmax), size(v))
-    raz_fac = heaviside.(m.β*v - vmax)
-    return relu.(dot.(eachcol(vx), eachcol(m.re_f(p)(xt))) + m.α * v[1,:]) .* raz_fac[1,:] ./ (v[1,:] .+ 1e-3)
-end
+# 
+# ################################################################################
+# # dynamics
+# struct StableDynamics{S, T<:AbstractFloat, U<:AbstractFloat}
+#     v::Lyapunov
+#     f_hat::S
+#     alpha::T
+#     nfdelays::Integer
+#     nvdelays::Integer
+#     p::U
+#     data_dim::Integer
+# end
+# Flux.@functor StableDynamics
+# # constructor
+# StableDynamics(data_dim; nfdelays=0, nvdelays=0, α=0.01, q=1.0202, act=C2_relu) = begin
+#     v = Lyapunov(data_dim, act=act)
+#     f_hat = Chain(Dense((data_dim) * (nfdelays + 1), 32, swish),
+#                Dense(32, 64, swish),
+#                Dense(64, 64, swish),
+#                Dense(64, 32, swish),
+#                Dense(32, data_dim))
+#     StableDynamics(v, f_hat, α, nfdelays, nvdelays, q, data_dim)
+# end
+# # forward pass
+# (m::StableDynamics)(xt::AbstractArray, yt::AbstractArray) = begin
+#     data_dim = m.data_dim
+#     x = xt[1:data_dim]
+#     if x == zero(x)
+#         return zero(x)
+#     end
+#     v, vx = forwardgrad(m.v, x)
+#     # razumikhin condition
+#     raz_fac = 1.0
+#     for i in 1:m.nvdelays
+#         # raz_fac = raz_fac * heaviside(m.p*v[1] - m.v(yt[i*data_dim + 1:(i+1)*data_dim])[1])
+#         raz_fac = raz_fac * C2_smooth_step(m.p*v[1] - m.v(yt[i*data_dim + 1:(i+1)*data_dim])[1])
+#     end
+#     # return m.f_hat(xt) - vx * relu(vx'*m.f_hat(xt) + m.alpha * v[1]) / sum(abs2, vx) * raz_fac
+#     return m.f_hat(xt) - vx * C2_relu_shifted(vx'*m.f_hat(xt) + m.alpha * v[1]) / sum(abs2, vx) * raz_fac
+# end
+#
+# ################################################################################
+# # soft stability
+# mutable struct StableDynamicsSoft{O, P, Q<:AbstractArray, R<:AbstractArray,
+#         S<:AbstractArray, T<:AbstractArray, U<:AbstractFloat,V<:AbstractFloat}
+#     re_f::O
+#     re_v::P
+#     p::Q
+#     q::R
+#     flags::S
+#     vlags::T
+#     α::U
+#     β::V
+#     data_dim::Integer
+#     nfparams::Integer
+#     nvparams::Integer
+# end
+# # constructor
+# StableDynamicsSoft(data_dim;flags=[],vlags=[], α=0.1, β=1.1, act=C2_relu) = begin
+#     nfdelays = length(flags)
+#     v = Lyapunov(data_dim, act=act)
+#     f = Chain(Dense((data_dim) * (nfdelays + 1), 32, swish),
+#                # Dense(32,32,swish),
+#                Dense(32, 64, swish),
+#                Dense(64, 64, swish),
+#                Dense(64, 32, swish),
+#                Dense(32, data_dim))
+#     q,re_v = Flux.destructure(v)
+#     nvparams = length(q)
+#     p,re_f = Flux.destructure(f)
+#     nfparams = length(p)
+#     StableDynamicsSoft(re_f, re_v, p, q, flags, vlags, α, β, data_dim, nfparams, nvparams)
+# end
+# StableDynamicsSoft(data_dim, p, q;flags=[],vlags=[], α=0.2, β=1.1, act=C2_relu) = begin
+#     nfdelays = length(flags)
+#     v = Lyapunov(data_dim, act=act)
+#     f = Chain(Dense((data_dim) * (nfdelays + 1), 32, swish),
+#                # Dense(32,32,swish),
+#                Dense(32, 64, swish),
+#                Dense(64, 64, swish),
+#                Dense(64, 32, swish),
+#                Dense(32, data_dim))
+#     _,re_v = Flux.destructure(v)
+#     nvparams = length(q)
+#     _,re_f = Flux.destructure(f)
+#     nfparams = length(p)
+#     StableDynamicsSoft(re_f, re_v, p, q, flags, vlags, α, β, data_dim, nfparams, nvparams)
+# end
+# StableDynamicsSoft(data_dim, re_f, re_v, p, q; flags=[],vlags=[], α=0.2, β=1.1, act=C2_relu) = begin
+#     nvparams = length(q)
+#     nfparams = length(p)
+#     StableDynamicsSoft(re_f, re_v, p, q, flags, vlags, α, β, data_dim, nfparams, nvparams)
+# end
+#
+# (m::StableDynamicsSoft)(xt::AbstractArray, yt::AbstractArray, p::AbstractArray, q::AbstractArray) = begin
+#     data_dim = m.data_dim
+#     nfdelays = length(m.flags)
+#     nvdelays = length(m.vlags)
+#     x = xt[1:data_dim]
+#     if x == zero(x)
+#         return zero(x)
+#     end
+#     v, vx = forwardgrad(m.re_v(q), x)
+#
+#     # razumikhin condition
+#     v_list = []
+#     for i in 1:nvdelays
+#         push!(v_list, m.re_v(q)(yt[i*data_dim + 1:(i+1)*data_dim])[1])
+#     end
+#     v_max = max(v_list)
+#     raz_fac = heaviside(m.β*v[1] - v_max)
+#
+#     # raz_fac = 1.0
+#     # for i in 1:nvdelays
+#     #     raz_fac = raz_fac * heaviside(m.β*v[1] - m.re_v(q)(yt[i*data_dim + 1:(i+1)*data_dim])[1])
+#     # end
+#     return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac
+# end
+#
+#
+#
+#
+# function true_loss_nn(xt::Array{T,1}, yt::Array{T,1}, p::AbstractArray, q::AbstractArray, m::StableDynamicsSoft) where {T<:Real}
+#     x = xt[1:m.data_dim]
+#     v, vx = forwardgrad(m.re_v(q), x)
+#     past_vs = map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
+#     vmax = maximum(past_vs)
+#     raz_fac = heaviside(m.β*v[1] - vmax)
+#     return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac / (v[1] + 1e-3)
+# end
+# function true_loss_nn(xt::Array{T,2}, yt::Array{T,2}, p::AbstractArray, q::AbstractArray, m::StableDynamicsSoft) where {T<:Real}
+#     x = xt[1:m.data_dim,:]
+#     v, vx = forwardgrad_batched(m.re_v(q), x)
+#     past_vs = vcat(map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim,:]), Array(1:length(m.vlags)))...)
+#     vmax = maximum(past_vs, dims=1)
+#     # println(size(vmax), size(v))
+#     raz_fac = heaviside.(m.β*v - vmax)
+#     return relu.(dot.(eachcol(vx), eachcol(m.re_f(p)(xt))) + m.α * v[1,:]) .* raz_fac[1,:] ./ (v[1,:] .+ 1e-3)
+# end
 
 function raz_loss(ut::Array{T,1}, pf::AbstractArray, pv::AbstractArray, m::RazNDDE) where {T<:Real}
     xt = ut[m.fmask]
     x = xt[1:m.data_dim]
-    v, vx = forwardgrad(m.re_v(q), x)
-    past_vs = map(i -> m.re_v(q)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
+    v, vx = forwardgrad(m.re_v(pv), x)
+    past_vs = map(i -> m.re_v(pv)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
     vmax = maximum(past_vs)
-    raz_fac = heaviside(m.β*v[1] - vmax)
-    return relu(vx'*m.re_f(p)(xt) + m.α * v[1]) * raz_fac / (v[1] + 1e-3)
+    raz_fac = heaviside(m.q*v[1] - vmax)
+    return relu(vx'*m.re_f(pf)(xt) + m.α * v[1]) * raz_fac / (v[1] + 1e-3)
 end
 function raz_loss(ut::Array{T,2}, pf::AbstractArray, pv::AbstractArray, m::RazNDDE) where {T<:Real}
     xt = ut[m.fmask, :]
@@ -311,6 +311,6 @@ function raz_loss(ut::Array{T,2}, pf::AbstractArray, pv::AbstractArray, m::RazND
     v, vx = forwardgrad_batched(m.re_v(pv), x)
     past_vs = vcat(map(i -> m.re_v(pv)(ut[i*m.data_dim + 1:(i+1)*m.data_dim,:]), Array(1:length(m.vlags)))...)
     vmax = maximum(past_vs, dims=1)
-    raz_fac = heaviside.(m.β*v - vmax)
+    raz_fac = heaviside.(m.q*v - vmax)
     return relu.(dot.(eachcol(vx), eachcol(m.re_f(pf)(xt))) + m.α * v[1,:]) .* raz_fac[1,:] ./ (v[1,:] .+ 1e-3)
 end

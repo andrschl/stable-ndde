@@ -74,9 +74,9 @@ ic_pend = vcat(
 # Parameters
 p_pend = Dict([
     g => 9.806
-    l => params["length"]
-    m => params["mass"]
-    k => params["friction"]
+    l => run_dict["length"]
+    m => run_dict["mass"]
+    k => run_dict["friction"]
 ])
 
 ## Define pendulum problem

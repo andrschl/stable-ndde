@@ -4,7 +4,7 @@ params = Dict(
     "server" => false,
 
     # dynamics problem
-    "npendulum" => 4,
+    "npendulum" => 5,
     "friction" => 0.5,
     "length" => 1.0,
     "mass" => 1.0,
@@ -14,7 +14,7 @@ params = Dict(
     "T_test" => 20,
     "Δt" => 0.1,
     "r" => 1.0,
-    "ntrain_trajs" => 10,
+    "ntrain_trajs" => 30,
     "ntest_trajs" => 5,
     "θmax" => 2*pi/5,
 
@@ -37,8 +37,6 @@ end
 
 ## Load packages
 include("../util/import.jl")
-
-
 
 ## log path
 logpath = "../../reports/"*splitext(basename(@__FILE__))[1]*Dates.format(now(), "_dd-mm-yy_HH:MM/")

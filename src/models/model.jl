@@ -72,6 +72,7 @@ RazNDDE(data_dim;flags=[],vlags=[], α=0.1, q=1.1, act=C2_relu) = begin
     nvparams = length(pv)
     pf,re_f = Flux.destructure(f)
     nfparams = length(pf)
+    # build fmask needed for lyapunov loss
     lags = union(flags,vlags)
     indices_f = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
     fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f)...)
@@ -93,18 +94,7 @@ RazNDDE(data_dim, pf, pv;flags=[],vlags=[], α=0.2, q=1.1, act=C2_relu) = begin
     nvparams = length(pv)
     _,re_f = Flux.destructure(f)
     nfparams = length(pf)
-    lags = union(flags,vlags)
-    indices_f_only = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
-    fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f_only)...)
-    function ndde_func!(du, u, h, p, t)
-        ut = vcat(u, map(τ -> h(p, t-τ), vcat(flags))...)
-        du .= re_f(p)(ut)
-    end
-    RazNDDE(re_f, re_v, pf, pv, flags, vlags, α, q, data_dim, nfparams, nvparams,fmask, ndde_func!)
-end
-RazNDDE(data_dim, re_f, re_v, pf, pv; flags=[],vlags=[], α=0.2, q=1.1, act=C2_relu) = begin
-    nvparams = length(pv)
-    nfparams = length(pf)
+    # build fmask needed for lyapunov loss
     lags = union(flags,vlags)
     indices_f_only = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
     fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f_only)...)
@@ -113,6 +103,102 @@ RazNDDE(data_dim, re_f, re_v, pf, pv; flags=[],vlags=[], α=0.2, q=1.1, act=C2_r
         du .= re_f(p)(ut)
     end
     RazNDDE(re_f, re_v, pf, pv, flags, vlags, α, q, data_dim, nfparams, nvparams,fmask, ndde_func!)
+end
+RazNDDE(data_dim, re_f, re_v, pf, pv; flags=[],vlags=[], α=0.2, q=1.1, act=C2_relu) = begin
+    nvparams = length(pv)
+    nfparams = length(pf)
+    # build fmask needed for lyapunov loss
+    lags = union(flags,vlags)
+    indices_f_only = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
+    fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f_only)...)
+    function ndde_func!(du, u, h, p, t)
+        ut = vcat(u, map(τ -> h(p, t-τ), flags)...)
+        du .= re_f(p)(ut)
+    end
+    RazNDDE(re_f, re_v, pf, pv, flags, vlags, α, q, data_dim, nfparams, nvparams,fmask, ndde_func!)
+end
+
+## Razumikhin NDDE type
+mutable struct KrasNDDE{O,P, Q<:AbstractArray, X<:AbstractArray, R<:AbstractArray, Y<:AbstractArray,
+        S<:AbstractFloat, T<:Integer, U<:Integer,V<:AbstractArray, W<:Function} <: AbstractNDDEModel
+    re_f::O
+    re_v::P
+    pf::Q
+    pv::X
+    flags::R
+    vlags::Y
+    α::S
+    q::S
+    data_dim::T
+    nfparams::U
+    nvparams::U
+    fmask::V
+    vmask::V
+    ndde_func!::W
+end
+# constructors
+KrasNDDE(data_dim;flags=[],vlags=[], α=0.1, q=1.1, act=C2_relu) = begin
+    nfdelays = length(flags)
+    f = Chain(Dense((data_dim) * (nfdelays + 1), 32, swish),
+               Dense(32, 64, swish),
+               Dense(64, 64, swish),
+               Dense(64, 32, swish),
+               Dense(32, data_dim))
+    v = Lyapunov(data_dim * (length(vlags)+1), act=act)
+    pv,re_v = Flux.destructure(v)
+    nvparams = length(pv)
+    pf,re_f = Flux.destructure(f)
+    nfparams = length(pf)
+    # build fmask needed for lyapunov loss
+    lags = union(flags,vlags)
+    indices_f = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
+    indices_v = sort(union(map(d->findfirst(isequal(d), lags), vlags),0))
+    fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f)...)
+    vmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_v)...)
+    function ndde_func!(du, u, h, p, t)
+        ut = vcat(u, map(τ -> h(p, t-τ), flags)...)
+        du .= re_f(p)(ut)
+    end
+    KrasNDDE(re_f, re_v, pf, pv, flags, vlags, α, q, data_dim, nfparams, nvparams, fmask, vmask, ndde_func!)
+end
+KrasNDDE(data_dim, pf, pv;flags=[],vlags=[], α=0.2, q=1.1, act=C2_relu) = begin
+    nfdelays = length(flags)
+    f = Chain(Dense((data_dim) * (nfdelays + 1), 32, swish),
+               Dense(32, 64, swish),
+               Dense(64, 64, swish),
+               Dense(64, 32, swish),
+               Dense(32, data_dim))
+    v = Lyapunov(data_dim * (length(vlags)+1), act=act)
+    _,re_v = Flux.destructure(v)
+    nvparams = length(pv)
+    _,re_f = Flux.destructure(f)
+    nfparams = length(pf)
+    # build fmask needed for lyapunov loss
+    lags = union(flags,vlags)
+    indices_f = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
+    indices_v = sort(union(map(d->findfirst(isequal(d), lags), vlags),0))
+    fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f)...)
+    vmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_v)...)
+    function ndde_func!(du, u, h, p, t)
+        ut = vcat(u, map(τ -> h(p, t-τ), flags)...)
+        du .= re_f(p)(ut)
+    end
+    KrasNDDE(re_f, re_v, pf, pv, flags, vlags, α, q, data_dim, nfparams, nvparams,fmask,vmask, ndde_func!)
+end
+KrasNDDE(data_dim, re_f, re_v, pf, pv; flags=[],vlags=[], α=0.2, q=1.1, act=C2_relu) = begin
+    nvparams = length(pv)
+    nfparams = length(pf)
+    # build fmask needed for lyapunov loss
+    lags = union(flags,vlags)
+    indices_f = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
+    indices_v = sort(union(map(d->findfirst(isequal(d), lags), vlags),0))
+    fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f)...)
+    vmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_v)...)
+    function ndde_func!(du, u, h, p, t)
+        ut = vcat(u, map(τ -> h(p, t-τ), flags)...)
+        du .= re_f(p)(ut)
+    end
+    KrasNDDE(re_f, re_v, pf, pv, flags, vlags, α, q, data_dim, nfparams, nvparams,fmask,vmask,  ndde_func!)
 end
 
 ## prediction
@@ -148,3 +234,4 @@ end
 
 ## include razumikhin
 include("../lyapunov/razumikhin.jl")
+include("../lyapunov/krasovskii.jl")

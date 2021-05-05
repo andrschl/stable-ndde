@@ -1,5 +1,6 @@
 # import modules
-include("import.jl")
+run_dict =Dict("server"=>false)
+include("../util/import.jl")
 
 # some constants
 data_dim = 2
@@ -15,7 +16,10 @@ max_lag = maximum(lags)
 # generate dynamics model
 
 # open loop dynamics
-function f_ol(x,u)
+# generate dynamics model
+
+# open loop dynamics
+function f_ol(x::Array{T,1},u::Array{T,1}) where {T<:Real}
     l = 0.3
     g = 9.81
     b = 0.0
@@ -25,6 +29,17 @@ function f_ol(x,u)
     dx1 = x2
     dx2 = g/l*sin(x1)-1 /(m*l^2)*(b*x2 + u[1])
     return vcat(dx1,dx2)
+end
+function f_ol(x::Array{T,2},u::Array{T,2}) where {T<:Real}
+    l = 0.3
+    g = 9.81
+    b = 0.0
+    m = 0.2
+    x1 = x[1,:]
+    x2 = x[2,:]
+    dx1 = x2
+    dx2 = g/l*sin.(x1).-1 /(m*l^2)*(b*x2 + u[1,:])
+    return permutedims(hcat(dx1,dx2),[2,1])
 end
 # linear feedback layer
 struct Feedback{S}
@@ -40,11 +55,15 @@ struct F_CL{S}
     u::S
 end
 Flux.@functor F_CL
-(m::F_CL)(xt::AbstractArray) = begin
+(m::F_CL)(xt::Array{T,1}) where {T<:Real} = begin
     return f_ol(xt[1:data_dim], m.u(xt[1+data_dim:end]))
+end
+(m::F_CL)(xt::Array{T,2}) where {T<:Real} = begin
+    return f_ol(xt[1:data_dim,:], m.u(xt[1+data_dim:end,:]))
 end
 # define feedback
 g = Feedback(Array([1.749  1.031 ;]))
+# g = Chain(Dense(2,1))
 # g = Chain(Dense(2,16,tanh),Dense(16,1))
 f_cl = F_CL(g)
 
@@ -52,18 +71,17 @@ f_cl = F_CL(g)
 # load Lyapunov Razumikhin function
 
 # include Lyapunov loss function
-include("../lyapunov/krasovskii.jl")
+include("../models/model.jl")
 # include("model_nn.jl")
-model_v = Lyapunov(data_dim*(nvdelays+1), act=C2_relu, layer_sizes=[128,128])
+model_v = Lyapunov(data_dim*(nvdelays+1), act=C2_relu, layer_sizes=[256,256])
 pv,rev = Flux.destructure(model_v)
 pf,ref = Flux.destructure(f_cl)
 
 # initialize helper object
 # model = StableDynamicsSoft(data_dim, ref, rev, pf, pv, flags=flags,vlags=vlags,α=0.1,β=1.0202)
-model = StableDynamicsSoft(data_dim, ref, rev, pf, pv, flags=flags,vlags=vlags,α=0.5,β=1.2)
+model = KrasNDDE(data_dim, ref, rev, pf, pv; flags=flags,vlags=vlags, α=2.0, q=2.0, act=C2_relu)
 
 f_soft = (u,p)->model.re_f(p)(u)
-
 ################################################################################
 # helper functions for integration
 
@@ -101,8 +119,8 @@ function true_lyapunov_ndde_func!(du, u, h, p, t)
     pf = p[1:model.nfparams]
     pv = p[model.nfparams+1:end]
     xt = vcat(x, map(τ -> h(pf,t-τ, idxs=1:data_dim), flags)...)
-    yt = vcat(x, map(τ -> h(pv,t-τ, idxs=1:data_dim), vlags)...)
-    du .= vcat(f_soft(xt, pf), true_loss_nn(xt, yt, pf, pv, model)*ones(1))
+    ut = vcat(x, map(τ -> h(pv,t-τ, idxs=1:data_dim), vcat(lags, lags.+lags[end]))...)
+    du .= vcat(f_soft(xt, pf), true_kras_loss(ut, pf, pv, model)*ones(1))
 end
 # loss integral
 function predict_true_loss(u0,h0,pf,pv,t)
@@ -111,7 +129,7 @@ function predict_true_loss(u0,h0,pf,pv,t)
     p = vcat(pf,pv)
     prob = DDEProblem(true_lyapunov_ndde_func!, z0, h0, t_span, p=p; constant_lags=sort(union(flags,vlags)))
     alg = MethodOfSteps(RK4())
-    return Array(solve(prob, alg, u0=z0, p=p, saveat=[last(t_span)], sensealg=ReverseDiffAdjoint(), abstol=1e-9,reltol=1e-6))[3,1]
+    return Array(solve(prob, alg, u0=z0, p=p, saveat=[last(t_span)], sensealg=ReverseDiffAdjoint()))#, abstol=1e-9,reltol=1e-6))[3,1]
     # return Array(solve(prob, alg, u0=z0, p=p, saveat=[last(t_span)], sensealg=ReverseDiffAdjoint()))[3,1]
     # return Array(solve(prob, alg, u0=z0, p=p, saveat=[last(t_span)], sensealg=ForwardDiffSensitivity()))[3,1]
 end
@@ -174,34 +192,34 @@ function generate_data(pf, batch_size, ntrajs; shuffle=true)
     return train_loader
 end
 
-loader = generate_data(pf, 32, 4)
-
+# loader = generate_data(pf, 32, 4)
+θmax = 1.0
+distr = Uniform(-θmax, θmax)
+data = map(i-> rand(distr, 2*data_dim*(length(vlags)+1)), 1:100000)
+train_loader = DataLoader(data, batchsize=256,shuffle=true)
+30*pi/180
 # # define loss function
 # loss = (x,y) -> (x-y)'*(x-y)/length(t)
-
 ################################################################################
 # training
 
 # train method
-function train!(pf, pv, opt_f, opt_v, iter, batch)
+function train!(pf, pv, opt_f, opt_v, iter, xt)
 
     println("start AD------------")
     @time begin
         dldpf = zero(pf)
         dldpv = zero(pv)
-        ls = []
-        for (_, xt) in batch
-            push!(ls, krasovskii_loss(model, xt, f_mask, v_mask, pf, pv))
-            dldpf += Zygote.gradient(pf->krasovskii_loss(model, xt, f_mask, v_mask, pf, pv), pf)[1]
-            dldpv += Zygote.gradient(pv->krasovskii_loss(model, xt, f_mask, v_mask, pf, pv), pv)[1]
-        end
-        Flux.Optimise.update!(opt_f, pf, dldpf)
-        Flux.Optimise.update!(opt_v, pv, dldpv)
-        println("dlfpf mean is: ", mean(abs,dldpf))
-        println("dldpv mean is: ", mean(abs,dldpv))
-        println("non-zero fraction: ", length(ls[ls.!=0.0])/length(ls))
-        println("max_loss: ", maximum(ls))
+        ls = kras_loss(xt, pf, pv, model)
+        dldpf += Zygote.gradient(pf->sum(kras_loss(xt, pf, pv, model)), pf)[1]
+        dldpv += Zygote.gradient(pv->sum(kras_loss(xt, pf, pv, model)), pv)[1]
     end
+    Flux.Optimise.update!(opt_f, pf, dldpf)
+    Flux.Optimise.update!(opt_v, pv, dldpv)
+    println("dlfpf mean is: ", mean(abs,dldpf))
+    println("dldpv mean is: ", mean(abs,dldpv))
+    println("non-zero fraction: ", length(ls[ls.!=0.0])/length(ls))
+    println("max_loss: ", maximum(ls))
 
     println("stop AD------------")
     println("iteration ", iter)
@@ -218,20 +236,21 @@ end
     # nbatches = 2
     # # nbatches = "all"
     # ntrajs = 10
-    train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
+    # train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
     for episode in 1:nepisodes
         batch_size = 256
-        nbatches = 2
+        nbatches = "all"
         # nbatches = "all"
         ntrajs = 100
         batch_idx = 1
-        train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
-        for batch in train_loader
+        # train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
+        for xt in train_loader
+            xt = hcat(xt...)
             println("------------")
             println("episode: ", episode, ", batch_idx: ", batch_idx)
             opt_f = ADAM(lrsf[episode])
             opt_v = ADAM(lrsv[episode])
-            train!(pf,pv, opt_f, opt_v, 3*(episode-1) + batch_idx, batch)
+            train!(pf,pv, opt_f, opt_v, 3*(episode-1) + batch_idx, xt)
 
             # plot Lyapunov function contout lines
             # if batch_idx % 1 == 0
@@ -248,6 +267,7 @@ end
             sol = dense_predict(u0, h0, pf, [0.0,3.0])
             display(Plots.plot(sol))
             if nbatches == "all"
+                batch_idx += 1
                 continue
             elseif batch_idx >= nbatches
                 break
@@ -257,6 +277,9 @@ end
         end
     end
 end
+iterate(train_loader)
+x_init = repeat([1.0,0.0], 22)
+kras_loss(x_init, pf, pv, model)
 
 # test it
 u0 =  [-0.5, 0.0]
