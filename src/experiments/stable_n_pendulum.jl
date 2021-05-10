@@ -1,10 +1,10 @@
 ## Hyperparameters
-params = Dict(
+config = Dict(
     # on server?
     "server" => false,
 
     # dynamics problem
-    "npendulum" => 5,
+    "npendulum" => 2,
     "friction" => 0.5,
     "length" => 1.0,
     "mass" => 1.0,
@@ -31,45 +31,49 @@ params = Dict(
 )
 
 ## some server specific stuff..
-if params["server"]
+if config["server"]
     ENV["GKSwstype"] = "nul"
 end
 
 ## Load packages
+cd(@__DIR__)
+cd("../../.")
+using Pkg; Pkg.activate("."); Pkg.instantiate();
+using PyCall
 include("../util/import.jl")
 
 ## log path
 logpath = "../../reports/"*splitext(basename(@__FILE__))[1]*Dates.format(now(), "_dd-mm-yy_HH:MM/")
 mkpath(logpath)
 wandb = pyimport("wandb")
-wandb.init(project="stable_n_pendulum", entity="andrschl", config=params)
+wandb.init(project="stable_n_pendulum", entity="andrschl", config=config)
 
 ## set seed
 Random.seed!(10)
 rng = MersenneTwister(1234)
 
 ## Load pendulum dataset
-N_PENDULUM = params["npendulum"]
+N_PENDULUM = config["npendulum"]
 include("../datasets/n_pendulum.jl")
 
 # initial conditions
-θmax = params["θmax"]
+θmax = config["θmax"]
 distr = Uniform(-θmax, θmax)
 # ICs = map(i-> vcat(θ.=>rand(rng, distr, N_PENDULUM), ω.=> zeros(N_PENDULUM)), 1:10)
-ICs_train = map(i-> vcat(zeros(N_PENDULUM), rand(rng, distr, N_PENDULUM)), 1:params["ntrain_trajs"])
-ICs_test = map(i-> vcat(zeros(N_PENDULUM), rand(rng, distr, N_PENDULUM)), 1:params["ntest_trajs"])
+ICs_train = map(i-> vcat(zeros(N_PENDULUM), rand(rng, distr, N_PENDULUM)), 1:config["ntrain_trajs"])
+ICs_test = map(i-> vcat(zeros(N_PENDULUM), rand(rng, distr, N_PENDULUM)), 1:config["ntest_trajs"])
 
-train_tspan = (0.0, params["T_train"])
-test_tspan = (0.0, params["T_test"])
-Δt = params["Δt"]
-r = params["r"]
+train_tspan = (0.0, config["T_train"])
+test_tspan = (0.0, config["T_test"])
+Δt = config["Δt"]
+r = config["r"]
 
 df_train = DDEODEDataset(ICs_train, train_tspan, Δt, pendulum_prob, r; obs_ids=Array(N_PENDULUM+1:2*N_PENDULUM))
 df_test = DDEODEDataset(ICs_test, test_tspan, Δt, pendulum_prob, r; obs_ids=Array(N_PENDULUM+1:2*N_PENDULUM))
 gen_dataset!(df_train)
 gen_dataset!(df_test)
-batchtime = params["batchtime"]
-batchsize = params["batchsize"]
+batchtime = config["batchtime"]
+batchsize = config["batchsize"]
 
 ## Define model
 include("../models/model.jl")
@@ -82,9 +86,9 @@ model = RazNDDE(data_dim; flags=flags, α=0.1, q=1.01)
 include("../training/training_util.jl")
 
 @time begin
-    rel_decay, locmin, locmax, period = params["lr_rel_decay"], params["lr_start_min"], params["lr_start_max"], params["lr_period"]
+    rel_decay, locmin, locmax, period = config["lr_rel_decay"], config["lr_start_min"], config["lr_start_max"], config["lr_period"]
     lr_args = (rel_decay, locmin, locmax, period)
-    lr_kwargs = Dict(:len => params["nepisodes"])
+    lr_kwargs = Dict(:len => config["nepisodes"])
     lr_schedule_gen = double_exp_decays
     lr_schedule = lr_schedule_gen(lr_args...;lr_kwargs...)
     pf = model.pf
@@ -99,19 +103,19 @@ include("../training/training_util.jl")
         # lyapunov train step
 
         # test evaluation
-        if iter % params["test_eval"] == 0
+        if iter % config["test_eval"] == 0
             # log train fit first trajectory
             wandb_plot_ndde_data_vs_prediction(df_train, 1, model, pf, "train fit 1")
 
             test_losses = []
-            for i in 1:params["ntest_trajs"]
+            for i in 1:config["ntest_trajs"]
                 t_test = df_test.trajs[i][1][df_test.N_hist:end]
                 u_test = hcat(df_test.trajs[i][2][df_test.N_hist:end]...)
                 u0_test = u_test[:,1]
                 h0_test = (p,t) -> df_test.trajs[i][3](t)
                 test_loss, _ = predict_ndde_loss(u0_test, h0_test, t_test, u_test, pf, model; N=df_test.N)
                 push!(test_losses, test_loss)
-                # if !params["server"]
+                # if !config["server"]
                 #     test_sol = dense_predict_ndde(u0_test, h0_test, test_tspan, pf, model)
                 #     pl = plot(test_sol, xlims=test_tspan, title="Generalization traj " * string(i))
                 #     scatter!(pl, t_test, u_test[1,:], label="θ_true1")
@@ -121,9 +125,9 @@ include("../training/training_util.jl")
                 # end
                 wandb_plot_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
             end
-            wandb.log(Dict("test loss"=> sum(test_losses)/params["ntest_trajs"]))
+            wandb.log(Dict("test loss"=> sum(test_losses)/config["ntest_trajs"]))
         end
-        if iter % params["checkpoint"] == 0
+        if iter % config["checkpoint"] == 0
             filename = logpath * "weights-" * string(iter) * ".bson"
         end
     end

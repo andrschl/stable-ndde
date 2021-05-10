@@ -1,5 +1,5 @@
 using Flux, Zygote, DifferentialEquations, DiffEqSensitivity, DataStructures, ReverseDiff
-# using ModelingToolkit, Symbolics
+using ModelingToolkit, Symbolics
 using StatsBase
 using Random, Distributions
 using Calculus, Dates

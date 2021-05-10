@@ -331,17 +331,29 @@ function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::Abst
         u_hist = hcat(d.noisy_trajs[traj_idx][2][in_traj_idx-d.N_hist+1:in_traj_idx]...)
 
         # fit gp
-        # mZero = MeanZero()
-        # kern = SE(0.0,0.0)
-        # logObsNoise = log(d.σ)
-        # gp = GP(Array{Float64}(t_hist), Array{Float64}(u_hist[1,:]), mZero, kern, logObsNoise)
-        # optimize!(gp)
-        # push!(h0s, t -> predict_y(gp, [t])[1])
+        h0 = []
+        for i in 1:length(u_hist[:,1])
+            # mZero = MeanZero()
+            # kern = SE(0.0,0.0)
+            # logObsNoise = log(d.σ)
+            # gp = GP(Array{Float64}(t_hist), Array{Float64}(u_hist[i,:]), mZero, kern, logObsNoise)
+            # optimize!(gp)
+            # push!(h0, t -> predict_y(gp, [t])[1])
 
-        f= GP(SqExponentialKernel())
-        fx = f(t_hist, d.σ)
-        p_fx =  posterior(fx, u_hist[1,:])
-        push!(h0s, t -> mean(p_fx([t])))
+            f= GP(SqExponentialKernel())
+            fx = f(t_hist, d.σ)
+            p_fx =  posterior(fx, u_hist[i,:])
+            push!(h0, t -> mean(p_fx([t])))
+
+            # pl=plot()
+            # plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx),
+            # scatter!(pl, t_hist, u_hist[i,:])
+            # plot!(pl, t->d.trajs[traj_idx][3](t)[i], title=string(traj_idx)*"_"*string(i))
+            # display(pl)
+        end
+        push!(h0s, t -> vcat(map(i -> h0[i](t), 1:length(h0))...))
+
+
     end
     return (p, ξ) -> hcat(map(i -> h0s[i](ξ + t0[i]), 1:length(t0))...)
 end
@@ -352,18 +364,28 @@ function get_noisy_h0(d::AbstractDataset, traj_idx::Integer)
     u_hist = hcat(d.noisy_trajs[traj_idx][2][1:d.N_hist]...)
 
     # fit gp
-    # mZero = MeanZero()
-    # kern = SE(0.0,0.0)
-    # logObsNoise = log(d.σ)
-    # gp = GP(Array{Float64}(t_hist), Array{Float64}(u_hist[1,:]), mZero, kern, logObsNoise)
-    # optimize!(gp)
+    h0 = []
+    for i in 1:length(u_hist[:,1])
+        # mZero = MeanZero()
+        # kern = SE(0.0,0.0)
+        # logObsNoise = log(d.σ)
+        # gp = GP(Array{Float64}(t_hist), Array{Float64}(u_hist[i,:]), mZero, kern, logObsNoise)
+        # optimize!(gp)
+        # push!(h0, t -> predict_y(gp, [t])[1])
 
-    f= GP(SqExponentialKernel())
-    fx = f(t_hist, d.σ)
-    p_fx =  posterior(fx, u_hist[1,:])
+        f= GP(SqExponentialKernel())
+        fx = f(t_hist, d.σ)
+        p_fx =  posterior(fx, u_hist[i,:])
+        push!(h0, t -> mean(p_fx([t])))
+    end
+    #
+    # f= GP(SqExponentialKernel())
+    # fx = f(t_hist, d.σ)
+    # p_fx =  posterior(fx, u_hist[1,:])
 
+    return (p,t) -> vcat(map(i -> h0[i](t), 1:length(h0))...)
     # return (p,t) -> predict_y(gp, [t])[1]
-    return (p,t) -> mean(p_fx([t]))
+    # return (p,t) -> mean(p_fx([t]))
 end
 
 

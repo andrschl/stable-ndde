@@ -1,7 +1,7 @@
 ## Hyperparameters
 config = Dict(
     # on server?
-    "server" => true,
+    "server" => false,
     "logging" => true,
 
     # ground truth dynamics
@@ -26,11 +26,11 @@ config = Dict(
     "rf" => 3.0,
 
     # lr schedule
-    "lr_rel_decay" => 0.1,
+    "lr_rel_decay" => 0.01,
     "lr_start_max" => 5e-3,
     "lr_start_min" => 1e-4,
     "lr_period" => 20,
-    "nepisodes" => 200,
+    "nepisodes" => 500,
 
     # stabilizing training
     "θmax_lyap" => 5.0,
@@ -81,14 +81,14 @@ end
 # runname = "stable oscillator"*current_time
 # logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
 
-project_name = "unstable_osc"
+project_name = "stable_osc_unstable"
 runname = "seed_"*string(seed)
-logpath = "reports/unstable_osc/seed_"*string(seed)*"/"
+logpath = "reports/stable_osc_unstable/seed_"*string(seed)*"/"
 mkpath(logpath)
 if config["logging"]
     wandb = pyimport("wandb")
     # wandb.init(project=splitext(basename(@__FILE__))[1], entity="andrschl", config=config, name=runname)
-    wandb.init(project=project_name, config=config, name=runname)
+    wandb.init(project=project_name, config=config, name=runname, group="blade-noise-0.2-episodes-500")
 end
 ## set seed
 Random.seed!(123)
@@ -175,7 +175,7 @@ include("../training/training_util.jl")
 
         # combined train step
         # kras_stable_ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, pv, batch_t, model, optf, optv, iter, lyap_loader)
-        ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, batch_t, model, optf)
+        ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, batch_t, model, optf,iter)
 
         if !config["server"]
             pl_train = scatter(batch_t, batch_u[1,:,1])
@@ -188,11 +188,13 @@ include("../training/training_util.jl")
             # log train fit
             if config["logging"]
                 for i in 1:config["ntrain_trajs"]
-                    if !config["server"]
-                        wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i))
-                    else
-                        save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
-                    end
+                    # if !config["server"]
+                    #     wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i))
+                    # else
+                    #     save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
+                    # end
+                    wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i))
+                    save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
                 end
             end
             # log test fit
@@ -211,15 +213,17 @@ include("../training/training_util.jl")
                     display(pl)
                 end
                 if config["logging"]
-                    if !config["server"]
-                        wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
-                    else
-                        save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
-                    end
+                    # if !config["server"]
+                    #     wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
+                    # else
+                    #     save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
+                    # end
+                    wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
+                    save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
                 end
             end
             if config["logging"]
-                wandb.log(Dict("test loss"=> sum(test_losses)/config["ntest_trajs"]))
+                wandb.log(Dict("test loss"=> sum(test_losses)/config["ntest_trajs"]), step=iter)
             end
         end
         # if iter % config["model checkpoint"] == 0

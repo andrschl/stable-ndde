@@ -1,5 +1,5 @@
 ## Train step method
-function ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, h0::Function, pf::AbstractArray, t::AbstractArray, m::AbstractNDDEModel, opt)
+function ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, h0::Function, pf::AbstractArray, t::AbstractArray, m::AbstractNDDEModel, opt,iter)
     println("____________________")
     println("start AD:")
     local train_loss, pred_u
@@ -16,7 +16,7 @@ function ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, h0::Functio
     Flux.Optimise.update!(opt, ps, gs)
     # logging
     if config["logging"]
-        wandb.log(Dict("train loss"=> train_loss))
+        wandb.log(Dict("train loss"=> train_loss), step=iter)
     end
 end
 
@@ -61,7 +61,7 @@ function raz_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, 
     Flux.Optimise.update!(optf, pf, gs[pf]+c*dldpf)
     Flux.Optimise.update!(optv, pv, dldpv)
     # logging
-    wandb.log(Dict("ndde train loss"=> train_loss, "raz train loss"=> lyap_loss))
+    wandb.log(Dict("ndde train loss"=> train_loss, "raz train loss"=> lyap_loss), step=iter)
 end
 
 function kras_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, h0::Function, pf::AbstractArray, pv::AbstractArray,
@@ -116,7 +116,7 @@ function kras_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray,
     if config["logging"]
         wandb.log(Dict("lr f" => optf.eta, "lr v" => optv.eta, "ndde train loss" => train_loss,
             "kras train loss" => lyap_loss, "dldpf dyn 1-norm" => dldpf_dyn_abs1, "dlfpf kras 1-norm" => dldpf_lyap_abs1,
-            "dldpv kras 1-norm" => dldpv_lyap_abs1))
+            "dldpv kras 1-norm" => dldpv_lyap_abs1), step=iter)
     end
 end
 
@@ -156,7 +156,6 @@ def wandb_plot(pred, data, title=""):
         plt.plot(x,y,label=label)
     for (x,y,label) in data:
         plt.scatter(x,y,label=label)
-    plt.legend()
     wandb.log({title: plt})
 """
 function wandb_plot_ndde_data_vs_prediction(df::AbstractDataset, traj_idx::Integer,
@@ -216,8 +215,24 @@ function save_plot_noisy_ndde_data_vs_prediction(df::AbstractDataset, traj_idx::
     u_init = hcat(h0.(nothing, t_init)...)
 
     # write plot data
-    CSV.write(save_dir*title*"data.csv", DataFrame(t_data = t_data, u_data = u_data[1,:], u_data_noisy = u_data_noisy[1,:]), header = true)
-    CSV.write(save_dir*title*"gt.csv", DataFrame(t_gt = t_gt, u_gt = u_gt[1,:]), header = true)
-    CSV.write(save_dir*title*"pred.csv", DataFrame(t_pred = t_pred, u_pred = u_pred[1,:]), header = true)
-    CSV.write(save_dir*title*"init.csv", DataFrame(t_init = t_init, u_init = u_init[1,:]), header = true)
+    data = DataFrame(t_data = t_data)
+    pred = DataFrame(t_pred = t_pred)
+    gt = DataFrame(t_gt = t_gt)
+    init = DataFrame(t_init= t_init)
+    for i in 1:length(u_data[:,1])
+        u = Symbol("u_data", i)
+        u_noisy = Symbol("u_data_noisy", i)
+        data[:, u] = u_data[i,:]
+        data[:, u_noisy] = u_data_noisy[i,:]
+        u = Symbol("u_pred",i)
+        pred[:, u] = u_pred[i,:]
+        u = Symbol("u_gt",i)
+        gt[:, u] = u_gt[i,:]
+        u = Symbol("u_init",i)
+        init[:, u] = u_init[i,:]
+    end
+    CSV.write(save_dir*title*"data.csv", data, header = true)
+    CSV.write(save_dir*title*"gt.csv", gt, header = true)
+    CSV.write(save_dir*title*"pred.csv", pred, header = true)
+    CSV.write(save_dir*title*"init.csv", init, header = true)
 end
