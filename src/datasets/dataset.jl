@@ -265,6 +265,32 @@ function Flux.Data._getobs(d::AbstractDataset, ids::Array)
     d[ids]
 end
 
+## fit GPs
+function get_gp(x, y, σ; k0="RBF")
+    ks = Dict("RBF"=>SqExponentialKernel(), "Mat32"=>Matern32Kernel(), "Mat52"=>Matern52Kernel())
+    k0 = ks[k0]
+    function objective_function(x, y)
+        function negative_log_likelihood(params)
+            kernel =
+                exp(params[1]) * (k0 ∘ ScaleTransform(exp(params[2])))
+            f = GP(kernel)
+            fx = f(x, exp(params[3]))
+            return -logpdf(fx, y)
+        end
+        return negative_log_likelihood
+    end
+    p0 = [0.0,0.0, log(σ)]
+    opt = optimize(objective_function(x, y), p0, LBFGS())
+    opt_kernel =
+        exp(opt.minimizer[1]) *
+        (k0 ∘ ScaleTransform(exp(opt.minimizer[2])))
+    opt_f = GP(opt_kernel)
+    opt_fx = opt_f(x, exp(opt.minimizer[3]))
+    # opt_fx = opt_f(x, σ)
+    opt_p_fx =  posterior(opt_fx, y)
+    return opt_p_fx
+end
+
 ## NDDE batching
 
 # get a batch of NDDE training data
@@ -298,7 +324,6 @@ function get_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, batchsize
     h0 = get_batch_h0(ts, us, traj_ids, d)
     return ts, us, h0, traj_ids
 end
-#TODO finish this...
 function get_noisy_ndde_batch(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
     ntrajs = length(d.trajs)
     data_dim = length(d.trajs[1][2][1])
@@ -320,9 +345,10 @@ function get_noisy_ndde_batch(d::AbstractDataset, batchtime::Integer, batchsize:
     end
     return ts, us, traj_ids
 end
+
 # only working for 1D data currently -> simply add univariate gps for higher dimensions
 # maybe define gps to be zero outside history interval
-function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::AbstractArray, d::AbstractDataset)
+function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::AbstractArray, d::AbstractDataset; k0="RBF")
     t0 = ts[1,:]
     h0s = []
     for (traj_idx, in_traj_idx) in traj_ids
@@ -334,19 +360,23 @@ function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::Abst
         h0 = []
         for i in 1:length(u_hist[:,1])
             # mZero = MeanZero()
-            # kern = SE(0.0,0.0)
+            # # kern = SE(0.0,0.0)
+            # kern = Mat32Iso(0.0,0.0)
             # logObsNoise = log(d.σ)
-            # gp = GP(Array{Float64}(t_hist), Array{Float64}(u_hist[i,:]), mZero, kern, logObsNoise)
+            # gp = GaussianProcesses.GP(Array{Float64}(t_hist), Array{Float64}(u_hist[i,:]), mZero, kern, logObsNoise)
             # optimize!(gp)
             # push!(h0, t -> predict_y(gp, [t])[1])
 
-            f= GP(SqExponentialKernel())
-            fx = f(t_hist, d.σ)
-            p_fx =  posterior(fx, u_hist[i,:])
+            # f= GP(SqExponentialKernel())
+            # fx = f(t_hist, d.σ)
+            # p_fx =  posterior(fx, u_hist[i,:])
+            p_fx = get_gp(t_hist, u_hist[i,:], d.σ,k0=k0)
             push!(h0, t -> mean(p_fx([t])))
 
+            ## show gps
             # pl=plot()
-            # plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx),
+            # plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx)
+            # # plot!(pl,gp)
             # scatter!(pl, t_hist, u_hist[i,:])
             # plot!(pl, t->d.trajs[traj_idx][3](t)[i], title=string(traj_idx)*"_"*string(i))
             # display(pl)
@@ -357,9 +387,10 @@ function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::Abst
     end
     return (p, ξ) -> hcat(map(i -> h0s[i](ξ + t0[i]), 1:length(t0))...)
 end
+
 # only working for 1D data currently -> simply add univariate gps for higher dimensions
 # maybe define gps to be zero outside history interval
-function get_noisy_h0(d::AbstractDataset, traj_idx::Integer)
+function get_noisy_h0(d::AbstractDataset, traj_idx::Integer; k0="RBF")
     t_hist = d.trajs[traj_idx][1][1:d.N_hist]
     u_hist = hcat(d.noisy_trajs[traj_idx][2][1:d.N_hist]...)
 
@@ -373,9 +404,10 @@ function get_noisy_h0(d::AbstractDataset, traj_idx::Integer)
         # optimize!(gp)
         # push!(h0, t -> predict_y(gp, [t])[1])
 
-        f= GP(SqExponentialKernel())
-        fx = f(t_hist, d.σ)
-        p_fx =  posterior(fx, u_hist[i,:])
+        # f= GP(SqExponentialKernel())
+        # fx = f(t_hist, d.σ)
+        # p_fx =  posterior(fx, u_hist[i,:])
+        p_fx = get_gp(t_hist, u_hist[i,:], d.σ,k0=k0)
         push!(h0, t -> mean(p_fx([t])))
     end
     #
@@ -389,9 +421,9 @@ function get_noisy_h0(d::AbstractDataset, traj_idx::Integer)
 end
 
 
-function get_noisy_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
+function get_noisy_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, batchsize::Integer; k0="RBF")
     ts, us, traj_ids = get_noisy_ndde_batch(d, batchtime, batchsize)
-    h0 = get_noisy_batch_h0(ts, us, traj_ids, d)
+    h0 = get_noisy_batch_h0(ts, us, traj_ids, d, k0=k0)
     return ts, us, h0, traj_ids
 end
 

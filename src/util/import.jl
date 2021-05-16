@@ -1,6 +1,6 @@
 using Flux, Zygote, DifferentialEquations, DiffEqSensitivity, DataStructures, ReverseDiff
 using ModelingToolkit, Symbolics
-using StatsBase
+using StatsBase, Optim
 using Random, Distributions
 using Calculus, Dates
 using LinearAlgebra

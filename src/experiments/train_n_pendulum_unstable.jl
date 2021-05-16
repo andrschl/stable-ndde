@@ -91,7 +91,7 @@ end
 # runname = "stable oscillator"*current_time
 # logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
 
-project_name = string(config["npendulum"])*"_pendulum_kras"
+project_name = string(config["npendulum"])*"_pendulum_unstable"
 runname = "seed_"*string(seed)
 logpath = "reports/"*project_name*"/seed_"*string(seed)*"/"
 mkpath(logpath)
@@ -187,8 +187,8 @@ include("../training/training_util.jl")
         end
 
         # combined train step
-        kras_stable_ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, pv, batch_t, model, optf, optv, iter, lyap_loader)
-        # ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, batch_t, model, optf,iter)
+        # kras_stable_ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, pv, batch_t, model, optf, optv, iter, lyap_loader)
+        ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, batch_t, model, optf,iter)
 
         if !config["server"]
             pl_train = plot(title="train")

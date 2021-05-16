@@ -159,7 +159,7 @@ def wandb_plot(pred, data, title=""):
     wandb.log({title: plt})
 """
 function wandb_plot_ndde_data_vs_prediction(df::AbstractDataset, traj_idx::Integer,
-        m::AbstractNDDEModel, pf::AbstractArray, title::String; Δtplot=0.02)
+        m::AbstractNDDEModel, pf::AbstractArray, title::String; Δtplot=0.02, k0="RBF")
     t_data = df.trajs[traj_idx][1][df.N_hist:end]
     u_data = hcat(df.trajs[traj_idx][2][df.N_hist:end]...)
     data = []
@@ -177,7 +177,7 @@ function wandb_plot_ndde_data_vs_prediction(df::AbstractDataset, traj_idx::Integ
     py"wandb_plot"(pred, data, title=title)
 end
 function wandb_plot_noisy_ndde_data_vs_prediction(df::AbstractDataset, traj_idx::Integer,
-        m::AbstractNDDEModel, pf::AbstractArray, title::String; Δtplot=0.02)
+        m::AbstractNDDEModel, pf::AbstractArray, title::String; Δtplot=0.02, k0="RBF")
     t_data = df.trajs[traj_idx][1][df.N_hist:end]
     u_data = hcat(df.trajs[traj_idx][2][df.N_hist:end]...)
     data = []
@@ -186,7 +186,7 @@ function wandb_plot_noisy_ndde_data_vs_prediction(df::AbstractDataset, traj_idx:
         push!(data, (t_data, u_data[i,:], label))
     end
     t_pred = Array(t_data[1]:Δtplot:t_data[end])
-    h0 = get_noisy_h0(df, traj_idx)
+    h0 = get_noisy_h0(df, traj_idx, k0=k0)
     u_pred = predict_ndde(h0(pf, t_data[1]), h0, t_pred, pf, m)
     pred = []
     for i in 1:length(u_pred[:,1])
@@ -197,7 +197,7 @@ function wandb_plot_noisy_ndde_data_vs_prediction(df::AbstractDataset, traj_idx:
 end
 
 function save_plot_noisy_ndde_data_vs_prediction(df::AbstractDataset, traj_idx::Integer,
-        m::AbstractNDDEModel, pf::AbstractArray, save_dir::String, title::String; Δtplot=0.02)
+        m::AbstractNDDEModel, pf::AbstractArray, save_dir::String, title::String; Δtplot=0.02, k0="RBF")
 
     t0 = df.trajs[traj_idx][1][df.N_hist]
     t_data = df.trajs[traj_idx][1][1:end]
@@ -208,7 +208,7 @@ function save_plot_noisy_ndde_data_vs_prediction(df::AbstractDataset, traj_idx::
     u_gt = hcat(df.trajs[traj_idx][3].(t_gt)...)
 
     t_pred = Array(t0:Δtplot:t_data[end])
-    h0 = get_noisy_h0(df, traj_idx)
+    h0 = get_noisy_h0(df, traj_idx, k0=k0)
     u_pred = predict_ndde(h0(pf, t0), h0, t_pred, pf, m)
 
     t_init = Array(t0-df.r:Δtplot:t0)
