@@ -40,15 +40,16 @@ function raz_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, 
         end
     end
     @time begin
-        dldpf = zero(pf)
-        dldpv = zero(pv)
+        dldpf_lyap = zero(pf)
+        dldpv_lyap = zero(pv)
         lyap_loss = 0.0
         i = 1
         for (_, u_lyap) in lyap_loader
-            lyap_loss += sum(raz_loss(u_lyap, pf, pv, model))
+            curr_loss = sum(raz_loss(u_lyap, pf, pv, model))
+            lyap_loss += curr_loss
             if curr_loss != 0.0
-                dldpf += Zygote.gradient(pf->sum(raz_loss(u_lyap, pf, pv, model)), pf)[1]
-                dldpv += Zygote.gradient(pv->sum(raz_loss(u_lyap, pf, pv, model)), pv)[1]
+                dldpf_lyap += Zygote.gradient(pf->sum(raz_loss(u_lyap, pf, pv, model)), pf)[1]
+                dldpv_lyap += Zygote.gradient(pv->sum(raz_loss(u_lyap, pf, pv, model)), pv)[1]
             end
             if config["nacc_steps_lyap"] <= i
                 break
@@ -62,7 +63,7 @@ function raz_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, 
     println("stop AD")
     dldpf_dyn = gs[pf]
     dldpf_lyap = dldpf_lyap * config["weight_f"]
-    dldpv_lyap = dldpf_lyap * config["weight_v"]
+    dldpv_lyap = dldpv_lyap * config["weight_v"]
     dldpf_dyn_abs1 = mean(abs,dldpf_dyn)
     dldpf_lyap_abs1 = mean(abs,dldpf_lyap)
     dldpv_lyap_abs1 = mean(abs,dldpv_lyap)
@@ -124,7 +125,7 @@ function kras_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray,
     println("stop AD")
     dldpf_dyn = gs[pf]
     dldpf_lyap = dldpf_lyap * config["weight_f"]
-    dldpv_lyap = dldpf_lyap * config["weight_v"]
+    dldpv_lyap = dldpv_lyap * config["weight_v"]
     dldpf_dyn_abs1 = mean(abs,dldpf_dyn)
     dldpf_lyap_abs1 = mean(abs,dldpf_lyap)
     dldpv_lyap_abs1 = mean(abs,dldpv_lyap)

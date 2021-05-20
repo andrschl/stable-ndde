@@ -105,7 +105,7 @@ using AbstractGPs
 
 project_name = string(config["npendulum"])*"_pendulum_LKF_alongtraj"
 runname = "seed_"*string(seed)
-configname = string(config["σ"])*"/"*config["k0"]*"/"
+configname = string(config["σ"])*"/"*string(config["weight_f"])*"/"*string(config["weight_v"])*"/"*string(config["grad_clipping"])*"/"
 devicename = config["server"] ? "server_" : "blade_"
 logpath = "reports/"*project_name*"/seed_"*string(seed)*"/"
 println(logpath)
