@@ -25,15 +25,16 @@ mutable struct DDEDDEDataset <: AbstractDDEDataset
     constant_lags::Array{Float64,1}
     r::Float64
 end
+
 DDEDDEDataset(h0s, tspan, Δt, prob, r, constant_lags; obs_ids=Array(1:length(h0s[1](prob.p, tspan[1]))), umax=100.0) = begin
     trajs = []
     state_dim = length(h0s[1](prob.p, first(tspan)))
-    N = Int(floor((last(tspan) - first(tspan))/Δt)) + 1
+    N = Int(floor((last(tspan) - first(tspan) - r + constant_lags[end])/Δt)) + 1
     N_hist = Int(r/Δt) + 1
     p = prob.p
     callback = nothing
     @assert r >= constant_lags[end]
-    DDEDDEDataset(trajs, [], 0.0, state_dim, obs_ids, h0s, tspan, Δt, N, N_hist, p, prob, umax, callback, constant_lags, r)
+    DDEDDEDataset(trajs, [], state_dim, obs_ids, h0s, tspan, Δt, N, N_hist, p, prob, umax, callback, constant_lags, r)
 end
 # type for dataset for ODE model based on DDE ground truth -> not needed at the moment
 mutable struct ODEDDEDataset <: AbstractDDEDataset
@@ -106,13 +107,24 @@ end
 ## Core functionality:
 
 # update the problem
-function remake!(d::AbstractDataset; kwargs...)
+function remake!(d::AbstractODEDataset; kwargs...)
     for (key, value) in kwargs
         if key != :prob
             setfield!(d, Symbol(key), value)
         end
         if key == :tspan
             d.N = Int(ceil((last(d.tspan)-first(d.tspan))/d.Δt))+1
+        end
+    end
+    d.prob = remake(d.prob, tspan=d.tspan, p=d.p)
+end
+function remake!(d::AbstractDDEDataset; kwargs...)
+    for (key, value) in kwargs
+        if key != :prob
+            setfield!(d, Symbol(key), value)
+        end
+        if key == :tspan
+            d.N = Int(ceil((last(d.tspan)-first(d.tspan)-d.r+d.constant_lags)/d.Δt))+1
         end
     end
     d.prob = remake(d.prob, tspan=d.tspan, p=d.p)
@@ -180,10 +192,9 @@ function gen_trajs(d::AbstractODEDataset; alg=Tsit5(), dense=true)
 end
 function gen_trajs(d::AbstractDDEDataset; alg=Tsit5(), dense=true)
     t = Array(first(d.tspan):d.Δt:last(d.tspan))
-    init_t = reverse(Array(first(d.tspan)-d.Δt:-d.Δt:first(d.tspan)-d.r))
+    init_t = reverse(Array(first(d.tspan)-d.Δt:-d.Δt:first(d.tspan)-d.constant_lags[end]))
     tot_t = vcat(init_t, t)
-    tot_tspan = (t[1]-d.r, t[end])
-    d.N_hist = length(init_t) + 1
+    tot_tspan = (t[1]-d.constant_lags[end], t[end])
     trajs = []
     for h0 in d.h0s
         u0 = h0(d.p, t[1])
@@ -191,7 +202,7 @@ function gen_trajs(d::AbstractDDEDataset; alg=Tsit5(), dense=true)
         sol = solve(prob, MethodOfSteps(alg), p=d.p, saveat=t, save_idxs=d.obs_ids, callback=d.callback)
         if dense
             dense_sol = solve(prob, MethodOfSteps(alg), p=d.p, save_idxs=d.obs_ids, dense=true, callback=d.callback)
-            tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1]&&ξ>=sol.t[1]-r  ? h0(d.p,ξ)[d.obs_ids] : zero(u0[d.obs_ids]))
+            tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1]&&ξ>=tot_tspan[1] ? h0(d.p,ξ)[d.obs_ids] : zero(u0[d.obs_ids]))
         else
             tot_sol = nothing
         end
@@ -227,7 +238,8 @@ function Base.getindex(d::DDEODEDataset, idx::Int)
     traj_idx = findfirst(n -> n>=idx, cum_lengths)
     in_traj_idx = d.N_hist-1 + (idx - vcat([0],cum_lengths)[traj_idx])
     t = d.trajs[traj_idx][1][in_traj_idx]
-    ut = reverse(vcat(d.trajs[traj_idx][2][in_traj_idx-d.N_hist+1:in_traj_idx]...))
+    # ut = reverse(vcat(d.trajs[traj_idx][2][in_traj_idx-d.N_hist+1:in_traj_idx]...))
+    ut = vcat(reverse(d.trajs[traj_idx][2][in_traj_idx-d.N_hist+1:in_traj_idx])...)
     t, ut
 end
 function Base.getindex(d::DDEDDEDataset, idx::Int)
@@ -236,7 +248,8 @@ function Base.getindex(d::DDEDDEDataset, idx::Int)
     traj_idx = findfirst(n -> n>=idx, cum_lengths)
     in_traj_idx = d.N_hist-1 + (idx - vcat([0],cum_lengths)[traj_idx])
     t = d.trajs[traj_idx][1][in_traj_idx]
-    ut = reverse(vcat(d.trajs[traj_idx][2][in_traj_idx-d.N_hist+1:in_traj_idx]...))
+    # ut = reverse(vcat(d.trajs[traj_idx][2][in_traj_idx-d.N_hist+1:in_traj_idx]...))
+    ut = vcat(reverse(d.trajs[traj_idx][2][in_traj_idx-d.N_hist+1:in_traj_idx])...)
     t, ut
 end
 function Base.getindex(d::AbstractDataset, ids::Array)
@@ -272,9 +285,10 @@ function get_gp(x, y, σ; k0="RBF")
     function objective_function(x, y)
         function negative_log_likelihood(params)
             kernel =
-                exp(params[1]) * (k0 ∘ ScaleTransform(exp(params[2])))
+                (exp(params[1])+1e-10) * (k0 ∘ ScaleTransform(exp(params[2])+1e-10))
             f = GP(kernel)
-            fx = f(x, exp(params[3]))
+            fx = f(x, exp(params[3])+1e-10)
+            # fx = f(x, σ)
             return -logpdf(fx, y)
         end
         return negative_log_likelihood
@@ -282,12 +296,19 @@ function get_gp(x, y, σ; k0="RBF")
     p0 = [0.0,0.0, log(σ)]
     opt = optimize(objective_function(x, y), p0, LBFGS())
     opt_kernel =
-        exp(opt.minimizer[1]) *
-        (k0 ∘ ScaleTransform(exp(opt.minimizer[2])))
+        (exp(opt.minimizer[1])+1e-10) *
+        (k0 ∘ ScaleTransform(exp(opt.minimizer[2])+1e-10))
     opt_f = GP(opt_kernel)
-    opt_fx = opt_f(x, exp(opt.minimizer[3]))
+    opt_fx = opt_f(x, exp(opt.minimizer[3])+1e-10)
     # opt_fx = opt_f(x, σ)
     opt_p_fx =  posterior(opt_fx, y)
+
+    # # log parameter info
+    # global ls, ms, αs
+    # push!(ls, exp(opt.minimizer[2])+1e-10)
+    # push!(ms, exp(opt.minimizer[1])+1e-10)
+    # push!(αs, opt_p_fx.data.α...)
+
     return opt_p_fx
 end
 
@@ -323,6 +344,9 @@ function get_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, batchsize
     ts, us, traj_ids = get_ndde_batch(d, batchtime, batchsize)
     h0 = get_batch_h0(ts, us, traj_ids, d)
     return ts, us, h0, traj_ids
+end
+function get_h0(d::AbstractDataset, traj_idx::Integer)
+    return (p, ξ) -> d.trajs[traj_idx][3](ξ)
 end
 function get_noisy_ndde_batch(d::AbstractDataset, batchtime::Integer, batchsize::Integer)
     ntrajs = length(d.trajs)
@@ -373,7 +397,7 @@ function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::Abst
             p_fx = get_gp(t_hist, u_hist[i,:], d.σ,k0=k0)
             push!(h0, t -> mean(p_fx([t])))
 
-            ## show gps
+            # # show gps
             # pl=plot()
             # plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx)
             # # plot!(pl,gp)
@@ -409,6 +433,14 @@ function get_noisy_h0(d::AbstractDataset, traj_idx::Integer; k0="RBF")
         # p_fx =  posterior(fx, u_hist[i,:])
         p_fx = get_gp(t_hist, u_hist[i,:], d.σ,k0=k0)
         push!(h0, t -> mean(p_fx([t])))
+
+        # # show gps
+        # pl=plot()
+        # plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx)
+        # # plot!(pl,gp)
+        # scatter!(pl, t_hist, u_hist[i,:])
+        # plot!(pl, t->d.trajs[traj_idx][3](t)[i], title=string(traj_idx)*"_"*string(i))
+        # display(pl)
     end
     #
     # f= GP(SqExponentialKernel())
@@ -426,97 +458,3 @@ function get_noisy_ndde_batch_and_h0(d::AbstractDataset, batchtime::Integer, bat
     h0 = get_noisy_batch_h0(ts, us, traj_ids, d, k0=k0)
     return ts, us, h0, traj_ids
 end
-
-
-## Example DEBUG
-# ode_func = (u,p,t)-> u
-# prob = ODEProblem(ode_func, zeros(10), (0,1.0))
-# df = DDEODEDataset(repeat([randn(10)], 3), (0.0,2.0), 0.1, prob, 0.5, obs_ids=[1,2])
-# gen_dataset!(df)
-# remake!(df, tspan=(0.0,10.0))
-#
-# # test batching
-# loader = Flux.Data.DataLoader(df, batchsize=5, shuffle=true)
-# a = zeros(12,5)
-# for (t,u) in loader
-#     println(size(t),size(u))
-#     global a = u
-# end
-
-
-## batching with DataLoaders.jl
-# function nobs(dataset::AbstractDataset)
-#     nobs = 0
-#     for traj in dataset.trajs
-#         nobs += length(traj[1])-dataset.N_hist
-#     end
-#     nobs
-# end
-# function getobs(dataset::ODEODEDataset, idx::Int)
-#     lengths = map(traj->length(traj[1])-dataset.N_hist, dataset.trajs)
-#     cum_lengths = map(n -> sum(lengths[1:n]), 1:length(dataset.trajs))
-#     traj_idx = findfirst(n->n>=idx, cum_lengths)
-#     in_traj_idx = dataset.N_hist + (idx - vcat([0],cum_lengths)[traj_idx])
-#     obs_t = trajs[traj_idx][1][in_traj_idx]
-#     obs_u = trajs[traj_idx][2][in_traj_idx]
-#     obs = [obs_t, obs_u]
-# end
-# function getobs(dataset::ODEDDEDataset, idx::Int)
-#     lengths = map(traj->length(traj[1])-dataset.N_hist, dataset.trajs)
-#     cum_lengths = map(n -> sum(lengths[1:n]), 1:length(dataset.trajs))
-#     traj_idx = findfirst(n->n>=idx, cum_lengths)
-#     in_traj_idx = dataset.N_hist + (idx - vcat([0],cum_lengths)[traj_idx])
-#     obs_t = trajs[traj_idx][1][in_traj_idx]
-#     obs_u = trajs[traj_idx][2][in_traj_idx]
-#     obs = [obs_t, obs_u]
-# end
-# function getobs(dataset::DDEODEDataset, idx::Int)
-#     lengths = map(traj -> length(traj[1])-dataset.N_hist, dataset.trajs)
-#     cum_lengths = map(n -> sum(lengths[1:n]), 1:length(dataset.trajs))
-#     traj_idx = findfirst(n -> n>=idx, cum_lengths)
-#     in_traj_idx = dataset.N_hist + (idx - vcat([0],cum_lengths)[traj_idx])
-#     obs_t = trajs[traj_idx][1][in_traj_idx]
-#     obs_u = vcat(trajs[traj_idx][2][in_traj_idx-dataset.N_hist:in_traj_idx]...)
-#     obs = [obs_t, obs_u]
-# end
-# function getobs(dataset::DDEDDEDataset, idx::Int)
-#     lengths = map(traj -> length(traj[1])-dataset.N_hist, dataset.trajs)
-#     cum_lengths = map(n -> sum(lengths[1:n]), 1:length(dataset.trajs))
-#     traj_idx = findfirst(n -> n>=idx, cum_lengths)
-#     in_traj_idx = dataset.N_hist + (idx - vcat([0],cum_lengths)[traj_idx])
-#     obs_t = trajs[traj_idx][1][in_traj_idx]
-#     obs_u = vcat(trajs[traj_idx][2][in_traj_idx-dataset.N_hist:in_traj_idx]...)
-#     obs = [obs_t, obs_u]
-# end
-
-## Old stuff...
-# function trajs2data(dataset::ODEODEDataset, trajs)
-#     for traj in trajs
-#         for i in 1:skip_ids:length(traj[1])-length(init_ts)
-#             t = traj[1][length(init_ts) + i]
-#             xt = vcat(traj[2][length(init_ts) + i .- Array(0:2*length(vlags))]...)
-#             push!(data, (t, xt))
-#             # push!(data, (t, randn(82)))
-#         end
-#     end
-# end
-# function trajs2data(dataset::ODEDDEDataset, trajs)
-#     for traj in trajs
-#         for i in 1:skip_ids:length(traj[1])-length(init_ts)
-#             t = traj[1][length(init_ts) + i]
-#             xt = vcat(traj[2][length(init_ts) + i .- Array(0:2*length(vlags))]...)
-#             push!(data, (t, xt))
-#             # push!(data, (t, randn(82)))
-#         end
-#     end
-# end
-# function trajs2data(dataset::DDEDataset, trajs)
-#     for traj in trajs
-#         for i in 1:skip_ids:length(traj[1])-length(init_ts)
-#             t = traj[1][length(init_ts) + i]
-#             xt = vcat(traj[2][length(init_ts) + i .- Array(0:2*length(vlags))]...)
-#             push!(data, (t, xt))
-#             # push!(data, (t, randn(82)))
-#         end
-#     end
-# end

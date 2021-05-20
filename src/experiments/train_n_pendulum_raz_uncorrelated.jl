@@ -1,4 +1,4 @@
-## Hyperparameters
+$## Hyperparameters
 config = Dict(
     # on server?
     "server" => false,
@@ -22,8 +22,6 @@ config = Dict(
     #"Δt_data" => 0.4,
     "batchtime" => 200,
     "batchsize" => 4,
-    # "batchtime" => 20,
-    # "batchsize" => 20,
     "const_init" => false,
     "k0" => "RBF",            # ks ∈ [Mat32, Mat52, RBF]
 
@@ -99,23 +97,22 @@ using AbstractGPs
 # runname = "stable oscillator"*current_time
 # logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
 
-project_name = string(config["npendulum"])*"_pendulum_unstable"
+project_name = string(config["npendulum"])*"_pendulum_kras"
 runname = "seed_"*string(seed)
-configname = string(config["σ"])*"/"*config["k0"]*"/"
-devicename = config["server"] ? "server_" : "blade_"
+hypname = string(config["σ"])*"/"*config["k0"]*"/"
+machine = config["server"] ? "server_" : "blade_"
 logpath = "reports/"*project_name*"/seed_"*string(seed)*"/"
 println(logpath)
-println(configname)
+println(hypname)
 mkpath(logpath)
 if config["logging"]
     wandb = pyimport("wandb")
     # wandb.init(project=splitext(basename(@__FILE__))[1], entity="andrschl", config=config, name=runname)
-    wandb.init(project=project_name, config=config, name=runname, group=devicename*configname)
+    wandb.init(project=project_name, config=config, name=runname, group=machine*hypname)
 end
-
 ## set seed
 Random.seed!(123)
-rng = MersenneTwister(123)
+rng = MersenneTwister(1234)
 
 ## Load pendulum dataset
 N_PENDULUM = config["npendulum"]
@@ -161,12 +158,21 @@ model = KrasNDDE(data_dim; flags=flags, vlags=vlags, α=config["α"], q=config["
 pf = model.pf
 pv = model.pv
 
+## Define model dataset for lyapunov training
+
+if !config["uncorrelated"]
+    lyap_prob = DDEProblem(model.ndde_func!, ICs_lyap[1],h0s_lyap[1], tspan_lyap, constant_lags=flags)
+    df_model = DDEDDEDataset(h0s_lyap, tspan_lyap, min(config["Δtv"],config["Δtf"]), lyap_prob, max(config["rv"],config["rf"]), flags)
+    gen_dataset!(df_model, p=model.pf)
+    lyap_loader = Flux.Data.DataLoader(df_model, batchsize=config["batchsize_lyap"], shuffle=true)
+else
+    data = hcat(map(i-> rand(rng, distr_lyap, 2*data_dim*(length(vlags)+1)), 1:config["uncorrelated_data_size"])...)
+    lyap_loader = Flux.Data.DataLoader((Array(1:config["uncorrelated_data_size"]),data), batchsize=config["batchsize_lyap"],shuffle=true)
+end
+
 # iterate(lyap_loader)
 ## training
 include("../training/training_util.jl")
-
-test_loss_data = DataFrame(iter = Int[], test_loss = Float64[])
-train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
 
 @time begin
     rel_decay, locmin, locmax, period = config["lr_rel_decay"], config["lr_start_min"], config["lr_start_max"], config["lr_period"]
@@ -191,8 +197,8 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
         end
 
         # combined train step
-        # kras_stable_ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, pv, batch_t, model, optf, optv, iter, lyap_loader)
-        ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, batch_t, model, optf, iter)
+        kras_stable_ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, pv, batch_t, model, optf, optv, iter, lyap_loader)
+        # ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, batch_t, model, optf,iter)
 
         if !config["server"]
             pl_train = plot(title="train")
@@ -211,7 +217,6 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
                     if !config["server"]
                         wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i), k0=config["k0"])
                         save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_", k0=config["k0"])
-
                     else
                         save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_", k0=config["k0"])
                     end
@@ -242,10 +247,7 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
                 end
             end
             if config["logging"]
-                test_loss = sum(test_losses)/config["ntest_trajs"]
-                global test_loss_data
-                push!(test_loss_data, [iter, test_loss])
-                wandb.log(Dict("test loss"=> test_loss), step=iter)
+                wandb.log(Dict("test loss"=> sum(test_losses)/config["ntest_trajs"]), step=iter)
             end
         end
         # if iter % config["model checkpoint"] == 0
@@ -255,10 +257,6 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
         # end
     end
 end
-
-# save params
-CSV.write(logpath*"test_loss.csv", test_loss_data, header = true)
-CSV.write(logpath*"train_loss.csv", train_loss_data, header = true)
 
 # save params
 using BSON: @save

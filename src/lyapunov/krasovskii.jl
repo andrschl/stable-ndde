@@ -217,5 +217,5 @@ function kras_loss(ut::Array{T,2}, pf::AbstractArray, pv::AbstractArray, m::Kras
     for i in 1:length(m.vlags)
         b += dot.(eachcol(vx[i*m.data_dim+1:(i+1)*m.data_dim,:]), eachcol(m.re_f(pf)(ut[m.fmask .+ i*m.data_dim,:])))
     end
-    return relu.(b + m.α * v[1,:].+0.1) ./ (v[1,:] .+ 1e-3)
+    return relu.(b + m.α * v[1,:]) ./ (v[1,:] .+ 1e-3)
 end

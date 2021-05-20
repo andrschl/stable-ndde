@@ -85,10 +85,10 @@ end
 
 function forwardgrad(m::Lyapunov, x::AbstractArray)
     # inlayer
-    # W0 = m.icnn.InLayer.weight
-    # b0 = m.icnn.InLayer.bias
-    W0 = m.icnn.InLayer.W
-    b0 = m.icnn.InLayer.b
+    W0 = m.icnn.InLayer.weight
+    b0 = m.icnn.InLayer.bias
+    # W0 = m.icnn.InLayer.W
+    # b0 = m.icnn.InLayer.b
     y0 = W0*x+b0
     z1 = m.act.(y0)
     # dz1dx = adjoint(m.act).(y0) .* W0
@@ -117,10 +117,10 @@ end
 
 function forwardgrad_batched(m::Lyapunov, x::AbstractArray)
     # inlayer
-    # W0 = m.icnn.InLayer.weight
-    # b0 = m.icnn.InLayer.bias
-    W0 = m.icnn.InLayer.W
-    b0 = m.icnn.InLayer.b
+    W0 = m.icnn.InLayer.weight
+    b0 = m.icnn.InLayer.bias
+    # W0 = m.icnn.InLayer.W
+    # b0 = m.icnn.InLayer.b
     y0 = W0*x.+b0
     z1 = m.act.(y0)
     # a1 = adjoint(m.act).(y0)

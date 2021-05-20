@@ -19,9 +19,16 @@ function ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, h0::Functio
         wandb.log(Dict("train loss"=> train_loss), step=iter)
     end
 end
+function clip_grads!(gs, gs_norm; threshold=config["grad_clipping"])
+    if gs_norm > threshold
+        gs = gs / gs_norm
+    end
+    return gs
+end
 
 function raz_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, h0::Function, pf::AbstractArray, pv::AbstractArray,
-            t::AbstractArray, m::AbstractNDDEModel, optf, optv, c, lyap_loader)
+            t::AbstractArray, m::AbstractNDDEModel, optf, optv, iter, lyap_loader)
+
     println("____________________")
     println("start AD:")
     local train_loss, pred_u
@@ -39,8 +46,10 @@ function raz_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, 
         i = 1
         for (_, u_lyap) in lyap_loader
             lyap_loss += sum(raz_loss(u_lyap, pf, pv, model))
-            dldpf += Zygote.gradient(pf->sum(raz_loss(u_lyap, pf, pv, model)), pf)[1]
-            dldpv += Zygote.gradient(pv->sum(raz_loss(u_lyap, pf, pv, model)), pv)[1]
+            if curr_loss != 0.0
+                dldpf += Zygote.gradient(pf->sum(raz_loss(u_lyap, pf, pv, model)), pf)[1]
+                dldpv += Zygote.gradient(pv->sum(raz_loss(u_lyap, pf, pv, model)), pv)[1]
+            end
             if config["nacc_steps_lyap"] <= i
                 break
             else
@@ -51,17 +60,33 @@ function raz_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, 
     end
 
     println("stop AD")
-    println("dlfpf 1-norm is: ", mean(abs,dldpf))
-    println("dldpv 1-norm is: ", mean(abs,dldpv))
+    dldpf_dyn = gs[pf]
+    dldpf_lyap = dldpf_lyap * config["weight_f"]
+    dldpv_lyap = dldpf_lyap * config["weight_v"]
+    dldpf_dyn_abs1 = mean(abs,dldpf_dyn)
+    dldpf_lyap_abs1 = mean(abs,dldpf_lyap)
+    dldpv_lyap_abs1 = mean(abs,dldpv_lyap)
+    println("dldpf dyn 1-norm is: ", dldpf_dyn_abs1)
+    println("dlfpf raz 1-norm is: ", dldpf_lyap_abs1)
+    println("dldpv raz 1-norm is: ", dldpv_lyap_abs1)
     # println("non-zero fraction: ", length(ls[ls.!=0.0])/length(ls))
     # println("max_loss: ", maximum(ls))
     println("ndde train_loss: ", train_loss)
-    println("raz loss", lyap_loss)
+    println("raz loss: ", lyap_loss)
     println("____________________")
-    Flux.Optimise.update!(optf, pf, gs[pf]+c*dldpf)
-    Flux.Optimise.update!(optv, pv, dldpv)
+    clip_grads!(dldpf_lyap, dldpf_lyap_abs1)
+    clip_grads!(dldpv_lyap, dldpv_lyap_abs1)
+    warmup_fac = min(1.0, max(0,iter-config["pause_steps"])/config["warmup_steps"]) * heaviside(iter-config["pause_steps"])
+    Flux.Optimise.update!(optf, pf, dldpf_dyn+warmup_fac*dldpf_lyap)
+    Flux.Optimise.update!(optv, pv, dldpv_lyap)
     # logging
-    wandb.log(Dict("ndde train loss"=> train_loss, "raz train loss"=> lyap_loss), step=iter)
+    if config["logging"]
+        wandb.log(Dict("lr f" => optf.eta, "lr v" => optv.eta, "ndde train loss" => train_loss,
+            "raz train loss" => lyap_loss, "dldpf dyn 1-norm" => dldpf_dyn_abs1, "dlfpf raz 1-norm" => dldpf_lyap_abs1,
+            "dldpv raz 1-norm" => dldpv_lyap_abs1), step=iter)
+        global train_loss_data
+        push!(train_loss_data, [iter, train_loss])
+    end
 end
 
 function kras_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, h0::Function, pf::AbstractArray, pv::AbstractArray,
@@ -98,7 +123,9 @@ function kras_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray,
     end
     println("stop AD")
     dldpf_dyn = gs[pf]
-    dldpf_dyn_abs1 = mean(abs, dldpf_dyn)
+    dldpf_lyap = dldpf_lyap * config["weight_f"]
+    dldpv_lyap = dldpf_lyap * config["weight_v"]
+    dldpf_dyn_abs1 = mean(abs,dldpf_dyn)
     dldpf_lyap_abs1 = mean(abs,dldpf_lyap)
     dldpv_lyap_abs1 = mean(abs,dldpv_lyap)
     println("dldpf dyn 1-norm is: ", dldpf_dyn_abs1)
@@ -109,14 +136,18 @@ function kras_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray,
     println("ndde train_loss: ", train_loss)
     println("kras loss: ", lyap_loss)
     println("____________________")
+    clip_grads!(dldpf_lyap, dldpf_lyap_abs1)
+    clip_grads!(dldpv_lyap, dldpv_lyap_abs1)
     warmup_fac = min(1.0, max(0,iter-config["pause_steps"])/config["warmup_steps"]) * heaviside(iter-config["pause_steps"])
-    Flux.Optimise.update!(optf, pf, dldpf_dyn+warmup_fac*config["weight_f"]*dldpf_lyap)
-    Flux.Optimise.update!(optv, pv, config["weight_v"]*dldpv_lyap)
+    Flux.Optimise.update!(optf, pf, dldpf_dyn+warmup_fac*dldpf_lyap)
+    Flux.Optimise.update!(optv, pv, dldpv_lyap)
     # logging
     if config["logging"]
         wandb.log(Dict("lr f" => optf.eta, "lr v" => optv.eta, "ndde train loss" => train_loss,
             "kras train loss" => lyap_loss, "dldpf dyn 1-norm" => dldpf_dyn_abs1, "dlfpf kras 1-norm" => dldpf_lyap_abs1,
             "dldpv kras 1-norm" => dldpv_lyap_abs1), step=iter)
+        global train_loss_data
+        push!(train_loss_data, [iter, train_loss])
     end
 end
 
@@ -159,7 +190,7 @@ def wandb_plot(pred, data, title=""):
     wandb.log({title: plt})
 """
 function wandb_plot_ndde_data_vs_prediction(df::AbstractDataset, traj_idx::Integer,
-        m::AbstractNDDEModel, pf::AbstractArray, title::String; Δtplot=0.02, k0="RBF")
+        m::AbstractNDDEModel, pf::AbstractArray, title::String; Δtplot=0.02)
     t_data = df.trajs[traj_idx][1][df.N_hist:end]
     u_data = hcat(df.trajs[traj_idx][2][df.N_hist:end]...)
     data = []
