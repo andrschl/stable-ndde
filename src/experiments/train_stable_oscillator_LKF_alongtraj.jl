@@ -30,7 +30,7 @@ config = Dict(
     "lr_start_max" => 5e-3,
     "lr_start_min" => 1e-4,
     "lr_period" => 20,
-    "nepisodes" => 500,
+    "nepisodes" => 200,
 
     # stabilizing training
     "θmax_lyap" => 5.0,
@@ -38,8 +38,9 @@ config = Dict(
     "T_lyap" => 30,
     "batchsize_lyap" => 256,
     "nacc_steps_lyap" => 1,
-    "uncorrelated" => true,
+    "uncorrelated" => false,
     "uncorrelated_data_size" => 100000,
+    "resample" = true,
 
     # lyapunov loss
     "Δtv" => 0.3,
@@ -70,10 +71,21 @@ include("../util/import.jl")
 using GaussianProcesses
 # using AbstractGPs
 ## seeding
-if length(ARGS)>0
+seed = 1
+if length(ARGS) >= 1
     seed = parse(Int64, ARGS[1])
-else
-    seed = 1
+end
+if length(ARGS) >= 2
+    config["σ"] = parse(Float64, ARGS[2])
+end
+if length(ARGS) >= 3
+    config["weight_f"] = parse(Float64, ARGS[3])
+end
+if length(ARGS) >= 4
+    config["weight_v"] = parse(Float64, ARGS[4])
+end
+if length(ARGS) >= 5
+    config["grad_clipping"] = parse(Float64, ARGS[5])
 end
 
 ## log path
@@ -81,15 +93,20 @@ end
 # runname = "stable oscillator"*current_time
 # logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
 
-project_name = "stable_osc_kras"
+project_name = "stable_osc_LKF_alongtraj"
 runname = "seed_"*string(seed)
-logpath = "reports/stable_osc_kras/seed_"*string(seed)*"/"
+configname = string(config["σ"])*"/"*string(config["weight_f"])*"/"*string(config["weight_v"])*"/"*string(config["grad_clipping"])*"/"
+devicename = config["server"] ? "server_" : "blade_"
+logpath = "reports/"*project_name*"/seed_"*string(seed)*"/"
+println(logpath)
+println(configname)
 mkpath(logpath)
 if config["logging"]
     wandb = pyimport("wandb")
     # wandb.init(project=splitext(basename(@__FILE__))[1], entity="andrschl", config=config, name=runname)
-    wandb.init(project=project_name, config=config, name=runname, group="blade-noise-0.2-episodes-500")
+    wandb.init(project=project_name, config=config, name=runname, group=devicename*configname)
 end
+
 ## set seed
 Random.seed!(123)
 rng = MersenneTwister(1234)

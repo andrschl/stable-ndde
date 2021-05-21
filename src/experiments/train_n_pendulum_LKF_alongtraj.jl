@@ -44,6 +44,8 @@ config = Dict(
     "nacc_steps_lyap" => 1,
     "uncorrelated" => false,
     "uncorrelated_data_size" => 100000,
+    "resample" => true,
+
 
     # lyapunov loss
     "Δtv" => 0.1,

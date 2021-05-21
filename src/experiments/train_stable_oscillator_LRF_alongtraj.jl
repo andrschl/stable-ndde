@@ -29,7 +29,7 @@ config = Dict(
     "lr_start_max" => 5e-3,
     "lr_start_min" => 1e-4,
     "lr_period" => 100,
-    "nepisodes" => 5000,
+    "nepisodes" => 200,
 
     # stabilizing training
     "θmax_lyap" => 10.0,
@@ -39,10 +39,12 @@ config = Dict(
     "nacc_steps_lyap" => 1,
     "uncorrelated" => true,
     "uncorrelated_data_size" => 100000,
+    "resample" = true,
+
 
     # lyapunov loss
     "Δtv" => 0.3,
-    "rv" => 3.0,
+    "rv" => 6.0,
     "α" => 0.01,
     "q" => 1.01,
     "weight_f" => 0.1,
@@ -58,24 +60,49 @@ config = Dict(
 if config["server"]
     ENV["GKSwstype"] = "nul"
 end
-
 ## Load packages
 cd(@__DIR__)
 cd("../../.")
 using Pkg; Pkg.activate("."); Pkg.instantiate();
 using PyCall
 include("../util/import.jl")
+using GaussianProcesses
+# using AbstractGPs
+## seeding
+seed = 1
+if length(ARGS) >= 1
+    seed = parse(Int64, ARGS[1])
+end
+if length(ARGS) >= 2
+    config["σ"] = parse(Float64, ARGS[2])
+end
+if length(ARGS) >= 3
+    config["weight_f"] = parse(Float64, ARGS[3])
+end
+if length(ARGS) >= 4
+    config["weight_v"] = parse(Float64, ARGS[4])
+end
+if length(ARGS) >= 5
+    config["grad_clipping"] = parse(Float64, ARGS[5])
+end
 
 ## log path
-current_time = Dates.format(now(), "_dd-mm-yy_HH:MM/")
-runname = "stable oscillator"*current_time
-logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
+project_name = "stable_osc_LKF_alongtraj"
+runname = "seed_"*string(seed)
+configname = string(config["σ"])*"/"*string(config["weight_f"])*"/"*string(config["weight_v"])*"/"*string(config["grad_clipping"])*"/"
+devicename = config["server"] ? "server_" : "blade_"
+logpath = "reports/"*project_name*"/seed_"*string(seed)*"/"
+println(logpath)
+println(configname)
 mkpath(logpath)
-wandb = pyimport("wandb")
-wandb.init(project=splitext(basename(@__FILE__))[1], entity="andrschl", config=config, name=runname)
+if config["logging"]
+    wandb = pyimport("wandb")
+    # wandb.init(project=splitext(basename(@__FILE__))[1], entity="andrschl", config=config, name=runname)
+    wandb.init(project=project_name, config=config, name=runname, group=devicename*configname)
+end
 
 ## set seed
-Random.seed!(10)
+Random.seed!(123)
 rng = MersenneTwister(1234)
 
 ## Load pendulum dataset
@@ -90,8 +117,8 @@ distr_lyap = Uniform(-config["θmax_lyap"], config["θmax_lyap"])
 
 # ICs_train = map(i-> vcat(rand(rng, distr_train, 2)), 1:config["ntrain_trajs"])
 # ICs_test = map(i-> vcat(rand(rng, distr_test, 2)), 1:config["ntest_trajs"])
-ICs_train = map(i-> [config["θmax_train"],0.0], 1:config["ntrain_trajs"]) # train with a single trajectory for now
-ICs_test = map(i-> [config["θmax_test"],0.0], 1:config["ntest_trajs"]) # test with constant zero initial velocity for now
+ICs_train = map(i-> [rand(distr_train, 1)[1],0.0], 1:config["ntrain_trajs"])
+ICs_test = map(i-> [rand(distr_test, 1)[1],0.0], 1:config["ntest_trajs"])
 ICs_lyap = map(i-> vcat(rand(rng, distr_lyap, 1)), 1:config["nlyap_trajs"])
 h0s_lyap = map(u0 -> (p,t) -> u0, ICs_lyap)
 
@@ -102,23 +129,22 @@ tspan_test = (0.0, config["T_test"])
 
 df_train = DDEODEDataset(ICs_train, tspan_train, config["Δt_data"], oscillator_prob, config["rf"]; obs_ids=[1])
 df_test = DDEODEDataset(ICs_test, tspan_test, config["Δt_data"], oscillator_prob, config["rf"]; obs_ids=[1])
-gen_dataset!(df_train)
-gen_dataset!(df_test)
-batchtime = config["batchtime"]
-batchsize = config["batchsize"]
 
-pl_train = scatter(df_train.trajs[1][1], hcat(df_train.trajs[1][2]...)[1,:], label="train data")
-plot!(pl_train, t->df_train.trajs[1][3](t)[1], xlims=(-df_train.r, df_train.tspan[end]), label="ground truth", title="train")
-pl_test = scatter(df_test.trajs[1][1], hcat(df_test.trajs[1][2]...)[1,:], label="test data")
-plot!(pl_test, t->df_test.trajs[1][3](t)[1], xlims=(-df_test.r, df_test.tspan[end]), label="ground truth", title="test")
-plot(pl_train, pl_test)
+gen_dataset!(df_train)
+Random.seed!(122+seed)
+gen_noise!(df_train, 0.2)
+gen_dataset!(df_test)
+gen_noise!(df_test, 0.2)
 
 ## Define model
 include("../models/model.jl")
 data_dim = 1
 flags = Array(config["Δtf"]:config["Δtf"]:config["rf"])
-vlags = Array(config["Δtv"]:config["Δtv"]:config["rv"]) # not used here
-model = KrasNDDE(data_dim; flags=flags, vlags=vlags, α=config["α"], q=config["q"])
+vlags = Array(config["Δtv"]:config["Δtv"]:config["rv"])
+Random.seed!(seed)
+model = RazNDDE(data_dim; flags=flags, vlags=vlags, α=config["α"], q=config["q"])
+pf = model.pf
+pv = model.pv
 
 ## Define model dataset for lyapunov training
 
@@ -131,7 +157,17 @@ else
     data = hcat(map(i-> rand(distr_lyap, 2*data_dim*(length(vlags)+1)), 1:config["uncorrelated_data_size"])...)
     lyap_loader = Flux.Data.DataLoader((Array(1:config["uncorrelated_data_size"]),data), batchsize=config["batchsize_lyap"],shuffle=true)
 end
+## Define model dataset for lyapunov training
 
+if !config["uncorrelated"]
+    lyap_prob = DDEProblem(model.ndde_func!, ICs_lyap[1],h0s_lyap[1], tspan_lyap, constant_lags=flags)
+    df_model = DDEDDEDataset(h0s_lyap, tspan_lyap, min(config["Δtv"],config["Δtf"]), lyap_prob, max(config["rv"],config["rf"]), flags)
+    gen_dataset!(df_model, p=model.pf)
+    lyap_loader = Flux.Data.DataLoader(df_model, batchsize=config["batchsize_lyap"], shuffle=true)
+else
+    data = hcat(map(i-> rand(rng, distr_lyap, 2*data_dim*(length(vlags)+1)), 1:config["uncorrelated_data_size"])...)
+    lyap_loader = Flux.Data.DataLoader((Array(1:config["uncorrelated_data_size"]),data), batchsize=config["batchsize_lyap"],shuffle=true)
+end
 # iterate(lyap_loader)
 ## training
 include("../training/training_util.jl")
