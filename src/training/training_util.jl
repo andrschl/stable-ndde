@@ -151,7 +151,104 @@ function kras_stable_ndde_train_step!(u0::AbstractArray, u_train::AbstractArray,
         push!(train_loss_data, [iter, train_loss])
     end
 end
+function kras_stabilize_train_step!(pf::AbstractArray, pv::AbstractArray, m::AbstractNDDEModel, optf, optv, iter, lyap_loader)
+    println("____________________")
+    println("start AD:")
+    @time begin
+        dldpf_lyap = zero(pf)
+        dldpv_lyap = zero(pv)
+        lyap_loss = 0.0
+        i = 1
+        for (_, u_lyap) in lyap_loader
+            curr_loss = sum(kras_loss(u_lyap, pf, pv, m))
+            lyap_loss += curr_loss
+            if curr_loss != 0.0
+                dldpf_lyap += Zygote.gradient(pf->sum(kras_loss(u_lyap, pf, pv, m)), pf)[1]
+                dldpv_lyap += Zygote.gradient(pv->sum(kras_loss(u_lyap, pf, pv, m)), pv)[1]
+            end
+            if config["nacc_steps_lyap"] <= i
+                break
+            else
+                i+=1
+            end
+        end
+        lyap_loss=lyap_loss/i
+    end
+    println("stop AD")
+    dldpf_lyap = dldpf_lyap * config["weight_f"]
+    dldpv_lyap = dldpv_lyap * config["weight_v"]
+    dldpf_lyap_abs1 = mean(abs,dldpf_lyap)
+    dldpv_lyap_abs1 = mean(abs,dldpv_lyap)
+    println("dlfpf kras 1-norm is: ", dldpf_lyap_abs1)
+    println("dldpv kras 1-norm is: ", dldpv_lyap_abs1)
+    # println("non-zero fraction: ", length(ls[ls.!=0.0])/length(ls))
+    # println("max_loss: ", maximum(ls))
+    println("kras loss: ", lyap_loss)
+    println("____________________")
+    clip_grads!(dldpf_lyap, dldpf_lyap_abs1)
+    clip_grads!(dldpv_lyap, dldpv_lyap_abs1)
+    warmup_fac = min(1.0, max(0,iter-config["pause_steps"])/config["warmup_steps"]) * heaviside(iter-config["pause_steps"])
+    Flux.Optimise.update!(optf, pf, warmup_fac*dldpf_lyap)
+    Flux.Optimise.update!(optv, pv, dldpv_lyap)
+    # logging
+    if config["logging"]
+        wandb.log(Dict("lr f" => optf.eta, "lr v" => optv.eta,
+            "kras train loss" => lyap_loss, "dlfpf kras 1-norm" => dldpf_lyap_abs1,
+            "dldpv kras 1-norm" => dldpv_lyap_abs1), step=iter)
+        global train_loss_data
+        push!(train_loss_data, [iter, lyap_loss])
+    end
+end
+function raz_stabilize_train_step!(pf::AbstractArray, pv::AbstractArray, m::AbstractNDDEModel, optf, optv, iter, lyap_loader)
 
+    println("____________________")
+    println("start AD:")
+    @time begin
+        dldpf_lyap = zero(pf)
+        dldpv_lyap = zero(pv)
+        lyap_loss = 0.0
+        i = 1
+        for (_, u_lyap) in lyap_loader
+            curr_loss = sum(raz_loss(u_lyap, pf, pv, model))
+            lyap_loss += curr_loss
+            if curr_loss != 0.0
+                dldpf_lyap += Zygote.gradient(pf->sum(raz_loss(u_lyap, pf, pv, model)), pf)[1]
+                dldpv_lyap += Zygote.gradient(pv->sum(raz_loss(u_lyap, pf, pv, model)), pv)[1]
+            end
+            if config["nacc_steps_lyap"] <= i
+                break
+            else
+                i+=1
+            end
+        end
+        lyap_loss=lyap_loss/i
+    end
+
+    println("stop AD")
+    dldpf_lyap = dldpf_lyap * config["weight_f"]
+    dldpv_lyap = dldpv_lyap * config["weight_v"]
+    dldpf_lyap_abs1 = mean(abs,dldpf_lyap)
+    dldpv_lyap_abs1 = mean(abs,dldpv_lyap)
+    println("dlfpf raz 1-norm is: ", dldpf_lyap_abs1)
+    println("dldpv raz 1-norm is: ", dldpv_lyap_abs1)
+    # println("non-zero fraction: ", length(ls[ls.!=0.0])/length(ls))
+    # println("max_loss: ", maximum(ls))
+    println("raz loss: ", lyap_loss)
+    println("____________________")
+    clip_grads!(dldpf_lyap, dldpf_lyap_abs1)
+    clip_grads!(dldpv_lyap, dldpv_lyap_abs1)
+    warmup_fac = min(1.0, max(0,iter-config["pause_steps"])/config["warmup_steps"]) * heaviside(iter-config["pause_steps"])
+    Flux.Optimise.update!(optf, pf, warmup_fac*dldpf_lyap)
+    Flux.Optimise.update!(optv, pv, dldpv_lyap)
+    # logging
+    if config["logging"]
+        wandb.log(Dict("lr f" => optf.eta, "lr v" => optv.eta,
+            "raz train loss" => lyap_loss, "dlfpf raz 1-norm" => dldpf_lyap_abs1,
+            "dldpv raz 1-norm" => dldpv_lyap_abs1), step=iter)
+        global train_loss_data
+        push!(train_loss_data, [iter, lyap_loss])
+    end
+end
 
 ## cyclic learnig schedules
 function get_sin_schedule(min, max, period; len=10*period, niter_per_value=1)

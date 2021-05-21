@@ -73,7 +73,7 @@ RazNDDE(data_dim;flags=[],vlags=[], α=0.1, q=1.1, act=C2_relu) = begin
     pf,re_f = Flux.destructure(f)
     nfparams = length(pf)
     # build fmask needed for lyapunov loss
-    lags = union(flags,vlags)
+    lags = sort(union(flags,vlags))
     indices_f = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
     fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f)...)
     function ndde_func!(du, u, h, p, t)
@@ -95,7 +95,7 @@ RazNDDE(data_dim, pf, pv;flags=[],vlags=[], α=0.2, q=1.1, act=C2_relu) = begin
     _,re_f = Flux.destructure(f)
     nfparams = length(pf)
     # build fmask needed for lyapunov loss
-    lags = union(flags,vlags)
+    lags = sort(union(flags,vlags))
     indices_f_only = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
     fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f_only)...)
     function ndde_func!(du, u, h, p, t)
@@ -108,7 +108,7 @@ RazNDDE(data_dim, re_f, re_v, pf, pv; flags=[],vlags=[], α=0.2, q=1.1, act=C2_r
     nvparams = length(pv)
     nfparams = length(pf)
     # build fmask needed for lyapunov loss
-    lags = union(flags,vlags)
+    lags = sort(union(flags,vlags))
     indices_f_only = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
     fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f_only)...)
     function ndde_func!(du, u, h, p, t)
@@ -150,7 +150,7 @@ KrasNDDE(data_dim;flags=[],vlags=[], α=0.1, q=1.1, act=C2_relu) = begin
     pf,re_f = Flux.destructure(f)
     nfparams = length(pf)
     # build fmask needed for lyapunov loss
-    lags = union(flags,vlags)
+    lags = sort(union(flags,vlags))
     indices_f = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
     indices_v = sort(union(map(d->findfirst(isequal(d), lags), vlags),0))
     fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f)...)
@@ -174,7 +174,7 @@ KrasNDDE(data_dim, pf, pv;flags=[],vlags=[], α=0.2, q=1.1, act=C2_relu) = begin
     _,re_f = Flux.destructure(f)
     nfparams = length(pf)
     # build fmask needed for lyapunov loss
-    lags = union(flags,vlags)
+    lags = sort(union(flags,vlags))
     indices_f = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
     indices_v = sort(union(map(d->findfirst(isequal(d), lags), vlags),0))
     fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f)...)
@@ -189,7 +189,7 @@ KrasNDDE(data_dim, re_f, re_v, pf, pv; flags=[],vlags=[], α=0.2, q=1.1, act=C2_
     nvparams = length(pv)
     nfparams = length(pf)
     # build fmask needed for lyapunov loss
-    lags = union(flags,vlags)
+    lags = sort(union(flags,vlags))
     indices_f = sort(union(map(d->findfirst(isequal(d), lags), flags),0))
     indices_v = sort(union(map(d->findfirst(isequal(d), lags), vlags),0))
     fmask = vcat(map(i->Array(i*data_dim+1:(i+1)*data_dim), indices_f)...)
@@ -200,6 +200,7 @@ KrasNDDE(data_dim, re_f, re_v, pf, pv; flags=[],vlags=[], α=0.2, q=1.1, act=C2_
     end
     KrasNDDE(re_f, re_v, pf, pv, flags, vlags, α, q, data_dim, nfparams, nvparams,fmask,vmask,  ndde_func!)
 end
+
 
 ## prediction
 function predict_ndde(u0::Array{T,1}, h0::Function, t::AbstractArray, pf::AbstractArray, m::AbstractNDDEModel; alg=Tsit5()) where {T<:Real}

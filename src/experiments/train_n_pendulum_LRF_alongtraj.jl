@@ -44,6 +44,7 @@ config = Dict(
     "nacc_steps_lyap" => 1,
     "uncorrelated" => false,
     "uncorrelated_data_size" => 100000,
+    "resample" => true,
 
     # lyapunov loss
     "Δtv" => 0.1,
@@ -288,11 +289,16 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
                     if !config["server"]
                         wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i), k0=config["k0"])
                         save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_", k0=config["k0"])
+                        xs = LinRange(-1, 1, 100)
+                        ys = LinRange(-1, 1, 100)
+                        zs = [model.re_v(pv)([x,y])[1] for x in xs, y in ys]
+                        display(contour(xs, ys, zs; levels=20))
                     else
                         save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_", k0=config["k0"])
                     end
                 end
             end
+
             # log test fit
             test_losses = []
             for i in 1:config["ntest_trajs"]
@@ -332,7 +338,14 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
     end
 end
 
-# save params
+xs = Array(LinRange(-1, 1, 100))
+ys = Array(LinRange(-1, 1, 100))
+zs = [model.re_v(pv)([x,y])[1] for x in xs, y in ys]
+V_data = DataFrame(zs, :auto)
+V_xy = DataFrame(xs=xs, ys=ys)
+# save params for plots
+CSV.write(logpath*"V_data.csv", V_data, header = true)
+CSV.write(logpath*"V_xy.csv", V_data, header = true)
 CSV.write(logpath*"test_loss.csv", test_loss_data, header = true)
 CSV.write(logpath*"train_loss.csv", train_loss_data, header = true)
 

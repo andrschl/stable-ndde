@@ -207,7 +207,9 @@ function gen_trajs(d::AbstractDDEDataset; alg=Tsit5(), dense=true)
             tot_sol = nothing
         end
         init_u = map(ξ -> h0(d.p, ξ), init_t)
-        push!(trajs, [tot_t, vcat(init_u, sol.u), tot_sol])
+        tot_u = vcat(init_u, sol.u)
+        new_length = min(length(tot_u), length(tot_t))
+        push!(trajs, [tot_t[1:new_length], tot_u[1:new_length], tot_sol])
     end
     return trajs
 end

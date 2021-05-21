@@ -156,7 +156,7 @@
 #     vx = (a4 .* dz3dx)[1,:,:]  .+ 2*m.eps*x
 #     return v, vx
 # end
-# 
+#
 # ################################################################################
 # # dynamics
 # struct StableDynamics{S, T<:AbstractFloat, U<:AbstractFloat}
@@ -300,10 +300,10 @@ function raz_loss(ut::Array{T,1}, pf::AbstractArray, pv::AbstractArray, m::RazND
     xt = ut[m.fmask]
     x = xt[1:m.data_dim]
     v, vx = forwardgrad(m.re_v(pv), x)
-    past_vs = map(i -> m.re_v(pv)(yt[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
+    past_vs = map(i -> m.re_v(pv)(ut[i*m.data_dim + 1:(i+1)*m.data_dim])[1], Array(1:length(m.vlags)))
     vmax = maximum(past_vs)
     raz_fac = heaviside(m.q*v[1] - vmax)
-    return relu(vx'*m.re_f(pf)(xt) + m.α * v[1]) * raz_fac / (v[1] + 1e-3)
+    return relu(vx'*m.re_f(pf)(xt)+ m.α * v[1]) * raz_fac / (v[1] + 1e-3)
 end
 function raz_loss(ut::Array{T,2}, pf::AbstractArray, pv::AbstractArray, m::RazNDDE) where {T<:Real}
     xt = ut[m.fmask, :]

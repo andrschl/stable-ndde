@@ -1,6 +1,10 @@
-# import modules
-run_dict =Dict("server"=>false)
+# import modules## Load packages
+cd(@__DIR__)
+cd("../../.")
+using Pkg; Pkg.activate("."); Pkg.instantiate();
 include("../util/import.jl")
+include("constants_inverted_pendulum.jl")
+run_dict =Dict("server"=>false)
 
 # some constants
 data_dim = 2
@@ -178,26 +182,29 @@ function generate_data(pf, batch_size, ntrajs; shuffle=true)
         push!(trajs, [vcat(init_ts, sol.t), vcat(init_u, sol.u)])
     end
 
-    data = []
+    ts = []
+    xs = []
     Δtdata = 3
     for traj in trajs
         for i in 1:Δtdata:length(traj[1])-length(init_ts)
             t = traj[1][length(init_ts) + i]
             xt = vcat(traj[2][length(init_ts) + i .- Array(0:2*length(vlags))]...)
-            push!(data, (t, xt))
+            push!(xs,xt)
+            push!(ts, t)
             # push!(data, (t, randn(82)))
         end
     end
-    train_loader = DataLoader(data, batchsize=batch_size, shuffle=shuffle)
+    train_loader = DataLoader((ts,xs), batchsize=batch_size, shuffle=shuffle)
     return train_loader
 end
 
-# loader = generate_data(pf, 32, 4)
+train_loader = generate_data(pf, 256, 4)
 θmax = 1.0
 distr = Uniform(-θmax, θmax)
 data = map(i-> rand(distr, 2*data_dim*(length(vlags)+1)), 1:100000)
 train_loader = DataLoader(data, batchsize=256,shuffle=true)
 30*pi/180
+iterate(train_loader)
 # # define loss function
 # loss = (x,y) -> (x-y)'*(x-y)/length(t)
 ################################################################################
@@ -225,18 +232,18 @@ function train!(pf, pv, opt_f, opt_v, iter, xt)
     println("iteration ", iter)
 
 end
-
+using Plots
 # training loop
 @time begin
     nepisodes = 100
     lrsf = repeat([5e-3],nepisodes)
     # lrsf = repeat([0.0],nepisodes)
     lrsv = repeat([5e-3],nepisodes)
-    # batch_size = 32
+    batch_size = 256
     # nbatches = 2
     # # nbatches = "all"
-    # ntrajs = 10
-    # train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
+    ntrajs = 10
+    train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
     for episode in 1:nepisodes
         batch_size = 256
         nbatches = "all"
@@ -244,7 +251,7 @@ end
         ntrajs = 100
         batch_idx = 1
         # train_loader = generate_data(pf, batch_size, ntrajs, shuffle=true)
-        for xt in train_loader
+        for (_,xt) in train_loader
             xt = hcat(xt...)
             println("------------")
             println("episode: ", episode, ", batch_idx: ", batch_idx)
