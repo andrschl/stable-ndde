@@ -2,47 +2,45 @@
 config = Dict(
     # on server?
     "server" => false,
-    "logging" => true,
-
-    # ndde training
-    "ntrain_trajs" => 1,
-    "ntest_trajs" => 1,
-    "T_train" => 20.0,
-    "T_test" => 100.0,
-    "datasize" => 500,
-    #"Δt_data" => 0.4,
-    "batchtime" => 500,
-    "batchsize" => 1,
-    "const_init" => false,
-    "σ" => 0.05,
-    "k0" => "Mat52",            # ks ∈ [Mat32, Mat52, RBF]
-
-    # ndde model
-    "Δtf" => 0.5,
-    "rf" => 5.0,
+    "logging" => false,
 
     # lr schedule
-    "lr_rel_decay" => 0.1,
+    "lr_rel_decay" => 1.0,
     "lr_start_max" => 5e-3,
-    "lr_start_min" => 1e-4,
-    "lr_period" => 20,
-    "nepisodes" => 1000,
+    "lr_start_min" => 1e-5,
+    "lr_period" => 150,
+    "nepisodes" => 150,
+
+    # ground truth dynamics
+    "ω" => 1.0,
+    "γ" => 0.0,
+
+    # ndde model
+    "Δtf" => 0.3,
+    "rf" => 3.0,
+
+    # ndde training
+    "A_train" => 1.0,
+    "A_test" => 1.0,
+    "ntrain_trajs" => 1,
+    "ntest_trajs" => 1,
+    "T_train" => 12*pi,
+    "T_test" => 100.0,
+    "datasize" => 200,
+    "k0" => "RBF",
+    "σ" => 0.3,
 
     # logging
     "test_eval" => 20,
     "model checkpoint" => 500
 )
-
 ## argsparse
 seed = 1
 if length(ARGS) >= 1
     seed = parse(Int64, ARGS[1])
 end
 if length(ARGS) >= 2
-    config["k0"] = ARGS[3]
-end
-if length(ARGS) >= 3
-    config["σ"] = parse(Float64, ARGS[4])
+    config["σ"] = parse(Float64, ARGS[2])
 end
 
 ## some server specific stuff..
@@ -64,9 +62,9 @@ using AbstractGPs
 # runname = "stable oscillator"*current_time
 # logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
 
-project_name = "LV"
+project_name = "cos_NDDE"
 runname = "seed_"*string(seed)
-configname = string(config["σ"])*"/"*config["k0"]*"/"
+configname = string(config["σ"])*"/"
 devicename = config["server"] ? "server_" : "blade_"
 logpath = "reports/"*project_name*"/"*configname*runname*"/"
 mkpath(logpath)
@@ -77,33 +75,55 @@ if config["logging"]
 end
 
 ## set seed
+## set seed
 Random.seed!(123)
 rng = MersenneTwister(1234)
 
 ## Load pendulum dataset
-include("../datasets/lotka_volterra.jl")
+include("../datasets/stable_oscillator.jl")
 
-config["Δt_data"] = config["T_train"]/config["datasize"]
+## Define dataset
+data_dim = 1
+aug_dim = 1
+A = config["A_train"]
+data_size = config["datasize"]
+σ = config["σ"]
+tspan_train = (3.0, config["T_train"])
 
-# initial conditions
-distr_train = MixtureModel(Uniform, [(-2.0, -2.0/2), (2.0/2, 2.0)])
-distr_test = distr_train
 
-# ICs_train = map(i-> rand(distr_train, 2), 1:config["ntrain_trajs"])
-# ICs_test = map(i-> rand(distr_test, 2), 1:config["ntest_trajs"])
-ICs_train = [[1.0,1.0]]
-ICs_test = ICs_train
-tspan_train = (0.0, config["T_train"])
-tspan_test = (0.0, config["T_test"])
+# generate data
+t = Array(LinRange(0.0, config["T_train"], config["datasize"]))
+config["Δt"] = t[2]-t[1]
+true_sol = t->Array([A*cos(t)])
+dtrue_sol = t->Array([-A*sin(t)])
+function h0(p, t;idxs=nothing)
+    if !isa(t, Array)
+        return true_sol(t)
+    else
+        return hcat(true_sol.(t)...)
+    end
+end
+true_u = h0(nothing,t)
+dtrue_u = hcat(dtrue_sol.(t)...)
+u_noisy = true_u + σ*randn(data_dim, length(t))
+pl = scatter(t, u_noisy[1,:], label="data")
+plot!(pl, t->true_sol(t)[1], xlims=(0,12*pi))
+display(plot(pl))
 
-df_train = DDEODEDataset(ICs_train, tspan_train, config["Δt_data"], LV_prob, config["rf"];obs_ids=[1])
-df_test = DDEODEDataset(ICs_test, tspan_test, config["Δt_data"], LV_prob, config["rf"];obs_ids=[1])
 
+tspan_train = (3.0, config["T_train"])
+
+df_train
+df_train = DDEODEDataset([[1.0,0.0]], tspan_train, config["Δt"], oscillator_prob, config["rf"]; obs_ids=[1])
+df_train.trajs = [[t, vcat(true_u, true_sol]]
+map(col->col, eachcol(true_u))
 gen_dataset!(df_train)
 Random.seed!(122+seed)
-gen_noise!(df_train, config["σ"])
-gen_dataset!(df_test)
-gen_noise!(df_test, config["σ"])
+gen_noise!(df_train, 0.3)
+ df_train.trajs
+pl = scatter(t, df_train.noisy_trajs[], label="data")
+plot!(pl, t->true_sol(t)[1], xlims=(0,12*pi))
+display(plot(pl))
 
 ## Define model
 include("../models/model.jl")
@@ -118,11 +138,7 @@ pv = model.pv
 # iterate(lyap_loader)
 ## training
 include("../training/training_util.jl")
-get_noisy_ndde_batch_and_h0(df_train, config["batchtime"], config["batchsize"],k0="Mat32")
-plot(0:0.01:20, t->df_train.trajs[1][3](t)[1])
-scatter!(df_train.noisy_trajs[1][1], vcat(df_train.noisy_trajs[1][2]...))
 
-3
 @time begin
     rel_decay, locmin, locmax, period = config["lr_rel_decay"], config["lr_start_min"], config["lr_start_max"], config["lr_period"]
     lr_args = (rel_decay, locmin, locmax, period)
@@ -135,19 +151,22 @@ scatter!(df_train.noisy_trajs[1][1], vcat(df_train.noisy_trajs[1][2]...))
         # get ndde batch
         optf = ADAM(lr)
         optv=optf
-        ts, batch_u, batch_h0,_ = get_noisy_ndde_batch_and_h0(df_train, config["batchtime"], config["batchsize"],k0=config["k0"])
+        ts, batch_u, batch_h0,_ = get_noisy_ndde_batch_and_h0(df_train, config["batchtime"], config["batchsize"])
         # ts, batch_u, batch_h0,_ = get_ndde_batch_and_h0(df_train, config["batchtime"], config["batchsize"])
         batch_t = ts[:,1].-ts[1,1]
+        # get lyapunov data
+        global lyap_loader
+        if !config["uncorrelated"]
+            gen_dataset!(df_model, p=pf)
+            lyap_loader = Flux.Data.DataLoader(df_model, batchsize=config["batchsize_lyap"], shuffle=true)
+        end
 
         # combined train step
         # kras_stable_ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, pv, batch_t, model, optf, optv, iter, lyap_loader)
         ndde_train_step!(batch_h0(nothing, batch_t[1]), batch_u, batch_h0, pf, batch_t, model, optf,iter)
 
         if !config["server"]
-            pl_train = plot(title="train")
-            for i in 1:length(batch_u[:,1,1])
-                scatter!(pl_train, batch_t, batch_u[i,:,1])
-            end
+            pl_train = scatter(batch_t, batch_u[1,:,1])
             plot!(pl_train, dense_predict_ndde(batch_h0(nothing, batch_t[1])[:,1], (p,t)->batch_h0(p,t)[:,1], (batch_t[1],batch_t[end]), pf, model),xlims=(batch_t[1], batch_t[end]))
             display(pl_train)
         end
@@ -157,13 +176,13 @@ scatter!(df_train.noisy_trajs[1][1], vcat(df_train.noisy_trajs[1][2]...))
             # log train fit
             if config["logging"]
                 for i in 1:config["ntrain_trajs"]
-                    if !config["server"]
-                        # wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i), k0=config["k0"])
-                        save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_", k0=config["k0"])
-
-                    else
-                        save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_", k0=config["k0"])
-                    end
+                    # if !config["server"]
+                    #     wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i))
+                    # else
+                    #     save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
+                    # end
+                    wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i))
+                    save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
                 end
             end
             # log test fit
@@ -171,7 +190,7 @@ scatter!(df_train.noisy_trajs[1][1], vcat(df_train.noisy_trajs[1][2]...))
             for i in 1:config["ntest_trajs"]
                 t_test = df_test.noisy_trajs[i][1][df_test.N_hist:end]
                 u_test = hcat(df_test.noisy_trajs[i][2][df_test.N_hist:end]...)
-                h0_test = get_noisy_h0(df_test, i,k0=config["k0"])
+                h0_test = get_noisy_h0(df_test, i)
                 u0_test = h0_test(pf, t_test[1])
                 test_loss, _ = predict_ndde_loss(u0_test, h0_test, t_test, u_test, pf, model; N=df_test.N)
                 push!(test_losses, test_loss)
@@ -182,12 +201,13 @@ scatter!(df_train.noisy_trajs[1][1], vcat(df_train.noisy_trajs[1][2]...))
                     display(pl)
                 end
                 if config["logging"]
-                    if !config["server"]
-                        # wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i), k0=config["k0"])
-                        save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_", k0=config["k0"])
-                    else
-                        save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_", k0=config["k0"])
-                    end
+                    # if !config["server"]
+                    #     wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
+                    # else
+                    #     save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
+                    # end
+                    wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
+                    save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
                 end
             end
             if config["logging"]

@@ -107,9 +107,9 @@ using AbstractGPs
 project_name = string(config["npendulum"])*"_pendulum_LRF_alongtraj"
 runname = "seed_"*string(seed)
 string(config["weight_f"])
-configname = string(config["σ"])*"/"*string(config["weight_f"])*"/"*string(config["weight_v"])*"/"*string(config["grad_clipping"])*"/"
+configname = "/"*string(config["σ"])*"/"*string(config["weight_f"])*"/"*string(config["weight_v"])*"/"*string(config["grad_clipping"])*"/"
 devicename = config["server"] ? "server_" : "blade_"
-logpath = "reports/"*project_name*"/seed_"*string(seed)*"/"
+logpath = "reports/"*project_name*configname*"/seed_"*string(seed)*"/"
 println(logpath)
 println(configname)
 mkpath(logpath)
@@ -260,10 +260,12 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
         # sample new lyapunov data
         global lyap_loader
         if !config["uncorrelated"]
-            init_t = df_train.trajs[1][1][1:df_train.N_hist]
-            h0s_lyap = map(i->sample_RKHS_h0s(init_t, data_dim, rng=rng), 1:config["nlyap_trajs"])
-            lyap_prob = DDEProblem(model.ndde_func!, zeros(data_dim), h0s_lyap[1], tspan_lyap, constant_lags=flags)
-            df_model = DDEDDEDataset(h0s_lyap, tspan_lyap, min(config["Δtv"],config["Δtf"]), lyap_prob, 2*config["rv"], flags)
+            if config["resample"]
+                init_t = df_train.trajs[1][1][1:df_train.N_hist]
+                h0s_lyap = map(i->sample_RKHS_h0s(init_t, data_dim, rng=rng), 1:config["nlyap_trajs"])
+                lyap_prob = DDEProblem(model.ndde_func!, zeros(data_dim), h0s_lyap[1], tspan_lyap, constant_lags=flags)
+                df_model = DDEDDEDataset(h0s_lyap, tspan_lyap, min(config["Δtv"],config["Δtf"]), lyap_prob, 2*config["rv"], flags)
+            end
             gen_dataset!(df_model, p=pf)
             lyap_loader = Flux.Data.DataLoader(df_model, batchsize=config["batchsize_lyap"], shuffle=true)
         end
@@ -313,6 +315,7 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
                     pl = plot(test_sol, xlims=tspan_test, title="Generalization traj " * string(i))
                     scatter!(pl, t_test, u_test[1,:], label="θ_true1")
                     display(pl)
+
                 end
                 if config["logging"]
                     if !config["server"]

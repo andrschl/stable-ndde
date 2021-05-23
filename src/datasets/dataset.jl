@@ -399,13 +399,13 @@ function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::Abst
             p_fx = get_gp(t_hist, u_hist[i,:], d.σ,k0=k0)
             push!(h0, t -> mean(p_fx([t])))
 
-            # # show gps
-            # pl=plot()
-            # plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx)
-            # # plot!(pl,gp)
-            # scatter!(pl, t_hist, u_hist[i,:])
-            # plot!(pl, t->d.trajs[traj_idx][3](t)[i], title=string(traj_idx)*"_"*string(i))
-            # display(pl)
+            # show gps
+            pl=plot()
+            plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx)
+            # plot!(pl,gp)
+            scatter!(pl, t_hist, u_hist[i,:])
+            plot!(pl, t->d.trajs[traj_idx][3](t)[i], title=string(traj_idx)*"_"*string(i))
+            display(pl)
         end
         push!(h0s, t -> vcat(map(i -> h0[i](t), 1:length(h0))...))
 

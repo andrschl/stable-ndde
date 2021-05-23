@@ -2,7 +2,7 @@
 config = Dict(
     # on server?
     "server" => false,
-    "logging" => true,
+    "logging" => false,
 
     # ground truth dynamics
     "ω" => 1.0,
@@ -10,7 +10,7 @@ config = Dict(
 
     # ndde training
     "θmax_train" => 1.0,
-    "θmax_test" => 5.0,
+    "θmax_test" => 10.0,
     "ntrain_trajs" => 4,
     "ntest_trajs" => 4,
     "T_train" => 4*pi,
@@ -20,6 +20,7 @@ config = Dict(
     "batchtime" => 50,
     "batchsize" => 4,
     "const_init" => false,
+    "σ" => 0.3,
 
     # ndde model
     "Δtf" => 0.3,
@@ -30,7 +31,7 @@ config = Dict(
     "lr_start_max" => 5e-3,
     "lr_start_min" => 1e-4,
     "lr_period" => 20,
-    "nepisodes" => 500,
+    "nepisodes" => 200,
 
     # stabilizing training
     "θmax_lyap" => 5.0,
@@ -70,10 +71,12 @@ include("../util/import.jl")
 # using GaussianProcesses
 using AbstractGPs
 ## seeding
-if length(ARGS)>0
+seed = 1
+if length(ARGS) >= 1
     seed = parse(Int64, ARGS[1])
-else
-    seed = 1
+end
+if length(ARGS) >= 2
+    config["σ"] = parse(Float64, ARGS[2])
 end
 
 ## log path
@@ -81,14 +84,18 @@ end
 # runname = "stable oscillator"*current_time
 # logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
 
-project_name = "stable_osc_unstable"
+project_name = "oscillator_unstable_23_05"
 runname = "seed_"*string(seed)
-logpath = "reports/stable_osc_unstable/seed_"*string(seed)*"/"
+configname = string(config["σ"])*"/"
+devicename = config["server"] ? "server_" : "blade_"
+logpath = "reports/"*project_name*"/seed_"*string(seed)*"/"
+println(logpath)
+println(configname)
 mkpath(logpath)
 if config["logging"]
     wandb = pyimport("wandb")
     # wandb.init(project=splitext(basename(@__FILE__))[1], entity="andrschl", config=config, name=runname)
-    wandb.init(project=project_name, config=config, name=runname, group="blade-noise-0.2-episodes-500")
+    wandb.init(project=project_name, config=config, name=runname, group=devicename*configname)
 end
 ## set seed
 Random.seed!(123)
@@ -100,8 +107,8 @@ include("../datasets/stable_oscillator.jl")
 config["Δt_data"] = config["T_train"]/config["datasize"]
 
 # initial conditions
-distr_train = Uniform(-config["θmax_train"], config["θmax_train"])
-distr_test = Uniform(-config["θmax_test"], config["θmax_test"])
+distr_train = MixtureModel(Uniform, [(-config["θmax_train"], -config["θmax_train"]/2), (config["θmax_train"]/2, config["θmax_train"])])
+distr_test = MixtureModel(Uniform, [(-config["θmax_test"], -config["θmax_test"]/2), (config["θmax_test"]/2, config["θmax_test"])])
 distr_lyap = Uniform(-config["θmax_lyap"], config["θmax_lyap"])
 
 # ICs_train = map(i-> vcat(rand(rng, distr_train, 2)), 1:config["ntrain_trajs"])
@@ -121,9 +128,9 @@ df_test = DDEODEDataset(ICs_test, tspan_test, config["Δt_data"], oscillator_pro
 
 gen_dataset!(df_train)
 Random.seed!(122+seed)
-gen_noise!(df_train, 0.3)
+gen_noise!(df_train, config["σ"])
 gen_dataset!(df_test)
-gen_noise!(df_test, 0.3)
+gen_noise!(df_test, config["σ"])
 
 ## Define model
 include("../models/model.jl")
@@ -150,6 +157,9 @@ end
 # iterate(lyap_loader)
 ## training
 include("../training/training_util.jl")
+
+test_loss_data = DataFrame(iter = Int[], test_loss = Float64[])
+train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
 
 @time begin
     rel_decay, locmin, locmax, period = config["lr_rel_decay"], config["lr_start_min"], config["lr_start_max"], config["lr_period"]
@@ -188,13 +198,12 @@ include("../training/training_util.jl")
             # log train fit
             if config["logging"]
                 for i in 1:config["ntrain_trajs"]
-                    # if !config["server"]
-                    #     wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i))
-                    # else
-                    #     save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
-                    # end
-                    wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i))
-                    save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
+                    if !config["server"]
+                        wandb_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, "train fit "*string(i))
+                        save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
+                    else
+                        save_plot_noisy_ndde_data_vs_prediction(df_train, i, model, pf, logpath, "train_"*string(i)*"_")
+                    end
                 end
             end
             # log test fit
@@ -213,17 +222,19 @@ include("../training/training_util.jl")
                     display(pl)
                 end
                 if config["logging"]
-                    # if !config["server"]
-                    #     wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
-                    # else
-                    #     save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
-                    # end
-                    wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
-                    save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
+                    if !config["server"]
+                        wandb_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, "test fit "*string(i))
+                        save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
+                    else
+                        save_plot_noisy_ndde_data_vs_prediction(df_test, i, model, pf, logpath, "test_"*string(i)*"_")
+                    end
                 end
             end
             if config["logging"]
-                wandb.log(Dict("test loss"=> sum(test_losses)/config["ntest_trajs"]), step=iter)
+                test_loss = sum(test_losses)/config["ntest_trajs"]
+                global test_loss_data
+                push!(test_loss_data, [iter, test_loss])
+                wandb.log(Dict("test loss"=> test_loss), step=iter)
             end
         end
         # if iter % config["model checkpoint"] == 0
@@ -233,6 +244,11 @@ include("../training/training_util.jl")
         # end
     end
 end
+
+# save params
+CSV.write(logpath*"test_loss.csv", test_loss_data, header = true)
+CSV.write(logpath*"train_loss.csv", train_loss_data, header = true)
+
 
 # save params
 using BSON: @save

@@ -119,7 +119,7 @@ pv,rev = Flux.destructure(model_v)
 pf,ref = Flux.destructure(f_cl)
 
 model = KrasNDDE(data_dim, ref, rev, pf, pv, flags=flags,vlags=vlags,α=config["α"],q=config["q"])
-model
+
 if !config["uncorrelated"]
     u0s = map(i -> sample_u0(config["θmax_lyap"]), 1:config["nlyap_trajs"])
     h0s = map(u0 -> (p,t)->dense_predict_reverse_ode(u0, flags[end], 0.0)(t), u0s)
@@ -179,21 +179,7 @@ include("../training/training_util.jl")
 
 test_loss_data = DataFrame(iter = Int[], test_loss = Float64[])
 train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
-(_,batch),_ = iterate(lyap_loader)
-batch
-model.vlags
-model.re_f(pf)(randn(4,10))
 
-loss_sum = 0
-Random.seed!(1)
-for (_,batch) in lyap_loader
-    # batch = randn(82,10)
-    # loss_sum += sum(kras_loss(batch, pf, pv, model))
-    for i in 1:length(batch[1,:])
-        loss_sum += sum(kras_loss(reverse(batch[:,i]), pf, pv, model))
-    end
-end
-kras_loss(reverse(batch[:,1]), pf, pv, model)
 function predict_true_loss(traj_idx,pf,pv,m, df_model)
     function lyapunov_ndde_func!(du, u, h, p, t)
         x = u[1:data_dim]
@@ -215,25 +201,7 @@ function predict_true_loss(traj_idx,pf,pv,m, df_model)
 
 end
 predict_true_loss(1,pf,pv,model, df_model)
-batch[:,1]
-m = model
-m.fmask
-batch
-xt = batch[m.fmask, :]
-yt = ut[m.vmask, :]
-df_model.trajs[1]
-scatter(Array(0:0.01:0.01*81), batch[:,3])
-kras_loss(a, pf, pv, model
-model
-a
-a = vcat(reverse(map(t-> exp(2*t)*ones(2), LinRange(1, 2, 41)))...)
-ut = batch[:,3]
-xt = ut[m.fmask]
-yt = ut[m.vmask]
-v, vx = forwardgrad(m.re_v(pv), yt)
-m.re_v(pv)(yt) ≈ v
-df_model.trajs
-reshape(Zygote.jacobian(x->m.re_v(pv)(x), yt)[1],:)≈vx
+
 
 data = hcat(map(i-> rand(rng, distr_lyap, 2*data_dim*(length(vlags)+1)), 1:config["uncorrelated_data_size"])...)
 lyap_loader = Flux.Data.DataLoader((Array(1:config["uncorrelated_data_size"]),data), batchsize=config["batchsize_lyap"],shuffle=true)

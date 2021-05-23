@@ -225,8 +225,6 @@ function raz_stabilize_train_step!(pf::AbstractArray, pv::AbstractArray, m::Abst
     end
 
     println("stop AD")
-    dldpf_lyap = dldpf_lyap * config["weight_f"]
-    dldpv_lyap = dldpv_lyap * config["weight_v"]
     dldpf_lyap_abs1 = mean(abs,dldpf_lyap)
     dldpv_lyap_abs1 = mean(abs,dldpv_lyap)
     println("dlfpf raz 1-norm is: ", dldpf_lyap_abs1)
@@ -235,11 +233,13 @@ function raz_stabilize_train_step!(pf::AbstractArray, pv::AbstractArray, m::Abst
     # println("max_loss: ", maximum(ls))
     println("raz loss: ", lyap_loss)
     println("____________________")
-    clip_grads!(dldpf_lyap, dldpf_lyap_abs1)
-    clip_grads!(dldpv_lyap, dldpv_lyap_abs1)
+    # clip_grads!(dldpf_lyap, dldpf_lyap_abs1)
+    # clip_grads!(dldpv_lyap, dldpv_lyap_abs1)
     warmup_fac = min(1.0, max(0,iter-config["pause_steps"])/config["warmup_steps"]) * heaviside(iter-config["pause_steps"])
     Flux.Optimise.update!(optf, pf, warmup_fac*dldpf_lyap)
+    old_pv = copy(pv)
     Flux.Optimise.update!(optv, pv, dldpv_lyap)
+    println("pv change: ",mean(abs, pv - old_pv))
     # logging
     if config["logging"]
         wandb.log(Dict("lr f" => optf.eta, "lr v" => optv.eta,
@@ -269,7 +269,6 @@ function double_exp_decays(reldecay, locmin, locmax, period; len=10*period, nite
     iters = Array(0:len)
     return zip(fun1(iters) .* fun2(iters), iters)
 end
-
 ## plotting for callback
 
 # python code
