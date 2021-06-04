@@ -1,39 +1,39 @@
 ## Hyperparameters
 config = Dict(
     # on server?
-    "server" => false,
-    "logging" => true,
+    "server" => true,
+    "logging" => false,
 
     # lr schedule
     "lr_rel_decay" => 0.1,
     "lr_start_max" => 5e-3,
     "lr_start_min" => 1e-4,
-    "lr_period" => 300,
-    "nepisodes" => 300,
+    "lr_period" => 100,
+    "nepisodes" => 1000,
 
     # ndde training
-    "A_train" => 1.0,
-    "A_test" => 1.0,
     "ntrain_trajs" => 2,
-    "ntest_trajs" => 1,
-    "T_train" => 30.0,
-    "T_test" => 100.0,
-    "datasize" => 151,
-    "k0" => "RBF",
-    "σ" => 0.0,
+    "ntest_trajs" => 2,
+    "T_train" => 20.0,
+    "T_test" => 40.0,
+    "datasize" => 150,
+    #"Δt_data" => 0.4,
+    "batchtime" => 50,
+    "batchsize" => 16,
+    "const_init" => false,
+    "σ" => 0.00,
 
     # logging
     "test_eval" => 20,
-    "model checkpoint" => 500
-)
+    "model checkpoint" => 500)
 
 ## argsparse
 seed = 1
 if length(ARGS) >= 1
-    seed = parse(Int64, ARGS[1])
+    config["nepisodes"] = parse(Int64, ARGS[1])
 end
 if length(ARGS) >= 2
-    config["σ"] = parse(Float64, ARGS[2])
+    config["lr_period"] = parse(Int64, ARGS[2])
 end
 
 ## some server specific stuff..
@@ -53,37 +53,54 @@ include("../util/import.jl")
 # runname = "stable oscillator"*current_time
 # logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
 
-project_name = "cos_ANODE"
+project_name = "LV_ANODE_const_init"
 runname = "seed_"*string(seed)
-configname = "/"*string(config["σ"])*"/"
+configname = string(config["nepisodes"])*"/"*string(config["lr_period"])*"/"*string(config["batchtime"])*"/"*string(config["batchsize"])
 devicename = config["server"] ? "server_" : "blade_"
-logpath = "reports/"*project_name*configname*runname*"/"
-println(logpath)
-println(configname)
+logpath = "reports/"*project_name*"/"*configname*"/"
 mkpath(logpath)
 if config["logging"]
     wandb = pyimport("wandb")
     # wandb.init(project=splitext(basename(@__FILE__))[1], entity="andrschl", config=config, name=runname)
-    wandb.init(project=project_name, config=config, name=runname, group=devicename*configname)
+    wandb.init(project=project_name, config=config, name=configname, group=devicename)
 end
 
 ## set seed
 Random.seed!(123)
 rng = MersenneTwister(123)
 
+## Load pendulum dataset
+include("../datasets/lotka_volterra.jl")
+
 ## Define dataset
 data_dim = 1
 aug_dim = 1
-A = 1.0
 data_size = config["datasize"]
-aug0 = 0.0
 σ = config["σ"]
 
 # generate data
 t = Array(LinRange(0.0, config["T_train"], config["datasize"]))
 config["Δt"] = t[2]-t[1]
-true_sol = t->Array([A*cos(t)])
-dtrue_sol = t->Array([-A*sin(t)])
+tspan_train = (0.0, config["T_train"])
+tspan_test = (0.0, config["T_test"])
+
+sol=solve(LV_prob, tspan=tspan_train, u0=[2.0,2.0], dense=true)
+sol2=solve(LV_prob, tspan=tspan_train, u0=[3.0, 3.0], dense=true)
+
+true_sol = t->sol(t)[1]
+dtrue_sol = t->sol(t)[2]
+true_sol2 = t->sol2(t)[1]
+dtrue_sol2 = t->sol2(t)[2]
+
+
+# true_sol(1)
+# plot(t->true_sol(t), xlims=tspan_train)
+# plot!(t->dtrue_sol(t), xlims=tspan_train)
+# plot(t->true_sol2(t), xlims=tspan_train)
+# plot!(t->dtrue_sol2(t), xlims=tspan_train)
+
+# true_sol = t->Array([A*cos(t)])
+# dtrue_sol = t->Array([-A*sin(t)])
 function h0(p, t;idxs=nothing)
     if !isa(t, Array)
         return true_sol(t)
@@ -96,19 +113,16 @@ dtrue_u = hcat(dtrue_sol.(t)...)
 u_noisy = true_u + σ*randn(1, length(t))
 if !config["server"]
     pl = scatter(t, u_noisy[1,:], label="data")
-    plot!(pl, t->true_sol(t)[1], xlims=(0,12*pi))
+    plot!(pl, t->true_sol(t)[1], xlims=tspan_train)
     display(plot(pl))
 end
 
 # augment dimension (ANODE)
 aug = zeros(aug_dim, data_size)   # initialize augmented dim with 0
-aug[1, 1] = aug0
 aug_u = cat(u_noisy, aug, dims=1)
-aug_u0 = aug_u[:, 1]
-# aug_u0 = [1.0, 0.0]
+aug_u0 = [2.0, 2.0]
+aug_u[:,1] = aug_u0
 
-true_sol2 = t->Array([2*A*sin(t)])
-dtrue_sol2 = t->Array([2*A*cos(t)])
 function h02(p, t;idxs=nothing)
     if !isa(t, Array)
         return true_sol2(t)
@@ -121,16 +135,15 @@ dtrue_u2 = hcat(dtrue_sol2.(t)...)
 u_noisy2 = true_u2 + σ*randn(1, length(t))
 if !config["server"]
     pl2 = scatter(t, u_noisy2[1,:], label="data2")
-    plot!(pl2, t->true_sol2(t)[1], xlims=(0,12*pi))
+    plot!(pl2, t->true_sol2(t)[1], xlims=tspan_train)
     display(plot(pl2))
 end
 
 # augment dimension (ANODE)
 aug2 = zeros(aug_dim, data_size)   # initialize augmented dim with 0
-aug2[1, 1] = aug0
 aug_u2 = cat(u_noisy2, aug2, dims=1)
-aug_u02 = aug_u2[:, 1]
-# aug_u02 = [0.0, 2.0]
+aug_u02 = [3.0, 3.0]
+aug_u2[:,1] = aug_u02
 
 # aug_u = zeros(data_dim, data_size)
 # aug_u[2,:] = dtrue_u
@@ -197,21 +210,20 @@ function train!(p, aug_u0, aug_u02, opt1, opt2, iter)
         train_loss, pred_u = predict_loss(p, aug_u0, u_noisy)
         return train_loss
     end
-    tot_train_loss+=train_loss
+    tot_train_loss+=train_loss/2
     Flux.Optimise.update!(opt1, ps[1], gs[p])
     Flux.Optimise.update!(opt2, ps[2], gs[aug_u0])
     println(gs[aug_u0], gs)
-    println("train loss: ", train_loss)
     ps = Flux.params(p, aug_u02)
     gs = gradient(ps) do
         train_loss, pred_u = predict_loss(p, aug_u02, u_noisy2)
         return train_loss
     end
-    tot_train_loss+=train_loss
+    tot_train_loss+=train_loss/2
     Flux.Optimise.update!(opt1, ps[1], gs[p])
     Flux.Optimise.update!(opt2, ps[2], gs[aug_u02])
     println(gs[aug_u02], gs)
-    println("train loss: ", train_loss)
+    println("train loss: ", tot_train_loss)
     push!(train_loss_data, [iter, tot_train_loss])
     if config["logging"]
         wandb.log(Dict("train loss" => tot_train_loss))
@@ -269,10 +281,10 @@ end
 # show initial trajectory
 pred_u = predict_node(p, aug_u0, t)
 loss = sum(abs2, true_u - pred_u[1:data_dim, :])/data_size
-sol = dense_predict_node(p, [-1,0], t)
+sol = dense_predict_node(p, aug_u0, t)
 if !config["server"]
-    pl = plot(t-> -cos(t), xlims=(0,30),label="ground truth")
-    plot!(pl, t->sol(t)[1], xlims=(0,30))
+    pl = plot(t-> true_sol(t), xlims=tspan_train,label="ground truth")
+    plot!(pl, t->sol(t)[1], xlims=tspan_train)
     display(pl)
 end
 println("-----------------------------------")
@@ -286,7 +298,7 @@ train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
     lr_kwargs = Dict(:len => config["nepisodes"])
     lr_schedule_gen = double_exp_decays
     lr_schedule = lr_schedule_gen(lr_args...;lr_kwargs...)
-    lr_u0_weight = 1.0
+    lr_u0_weight = 0.0
     # train loop
     iters = []
     lrs = []
@@ -387,8 +399,10 @@ if !config["server"]
     # scatter!(pl, t, aug_u[2,:], label="data2")
     plot!(pl, t_pl, u_pred[1,:], label="u1")
     plot!(pl, t_pl, u_pred[2,:], label="u2")
-    display(pl)
 end
+
+
+
 
 xs = Array(LinRange(-2, 2,200))
 ys = Array(LinRange(-2, 2,200))
@@ -398,14 +412,10 @@ uxy = [re(p)([x,y])[1] for x in xs for y in ys]
 vxy = [re(p)([x,y])[2] for x in xs for y in ys]
 CSV.write(logpath*"quiver.csv", DataFrame(x = xxy, y= yxy, u = uxy, v=vxy), header = true)
 
-# xs = Array(LinRange(-2, 2,200))
-# ys = Array(LinRange(-2, 2,200))
+
 # zs = [re(p)([x,y]) for x in xs, y in ys]
 # quiver([1,2,3],[3,2,1],quiver=([1,1,1],[1,2,3]))
-# xxy = [x for x in xs for y in ys]
-# yxy = [y for x in xs for y in ys]
-# uxy = [re(p)([x,y])[1] for x in xs for y in ys]
-# vxy = [re(p)([x,y])[2] for x in xs for y in ys]
+# quiver(xxy,yxy,quiver= 0.5 .* (uxy,vxy))
 
 
 

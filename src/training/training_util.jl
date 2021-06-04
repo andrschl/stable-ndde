@@ -17,6 +17,7 @@ function ndde_train_step!(u0::AbstractArray, u_train::AbstractArray, h0::Functio
     # logging
     if config["logging"]
         wandb.log(Dict("train loss"=> train_loss), step=iter)
+        push!(train_loss_data, [iter, train_loss])
     end
 end
 function clip_grads!(gs, gs_norm; threshold=config["grad_clipping"])

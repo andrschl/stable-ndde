@@ -49,7 +49,7 @@ if length(ARGS) >= 1
     seed = parse(Int64, ARGS[1])
 end
 if length(ARGS) >= 2
-    config["\alpha"] = parse(Float64, ARGS[2])
+    config["α"] = parse(Float64, ARGS[2])
 end
 if length(ARGS) >= 3
     config["q"] = parse(Float64, ARGS[3])
@@ -311,8 +311,8 @@ end
             end
             println("max in-batch loss: ", max_loss)
             if config["logging"]
-            wandb.log("train loss" => batch_loss)
-        end
+                wandb.log(Dict("train loss" => batch_loss))
+            end
         end
         # if iter % config["model checkpoint"] == 0
         #     using BSON: @save
@@ -332,7 +332,7 @@ CSV.write(logpath*"quiver.csv", DataFrame(zs, :auto), header = true)
 # pl = contourf(xs, ys, zs; levels=20)
 # display(pl)
 
-u0s = map(i -> sample_u0(config["θmax_lyap"]), 1:config["ntest_trajs"])
+u0s = map(i -> 	[0.8822508266912985,	0.47077964994519506], 1:config["ntest_trajs"])
 h0s = map(u0 -> (p,t)->dense_predict_reverse_ode(u0, flags[end], 0.0)(t), u0s)
 lyap_prob = DDEProblem(model.ndde_func!, zeros(data_dim), h0s[1], tspan_lyap, constant_lags=flags)
 df_model = DDEDDEDataset(h0s, tspan_lyap, min(config["Δtv"],config["Δtf"]), lyap_prob, config["rv"], flags)
@@ -349,13 +349,10 @@ for (j, traj) in enumerate(df_model.trajs)
         pred[:, u] = u_pred[i,:]
     end
     CSV.write(logpath*"test_pred"* string(j) *".csv", pred, header = true)
-    model2 = copy(model)
-    model2.α = 0.0001
-    model2.q = 1.0001
-    push!(test_loss_data, [j, predict_true_loss(j,pf,pv,model, df_model)])
-    push!(true_test_loss_data, [j, predict_true_loss(j,pf,pv,model2, df_model)])
+    # push!(test_loss_data, [j, predict_true_loss(j,pf,pv,model, df_model)])
+    # push!(true_test_loss_data, [j, predict_true_loss(j,pf,pv,model2, df_model)])
 end
-# display(pl)
+display(pl)
 
 # for (j, traj) in enumerate(df_model.trajs)
 #         for i in 1:data_dim
@@ -366,7 +363,6 @@ end
 #         end
 #
 # end
-
 
 # save params
 CSV.write(logpath*"test_loss.csv", test_loss_data, header = true)

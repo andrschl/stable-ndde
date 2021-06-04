@@ -199,7 +199,7 @@ function gen_trajs(d::AbstractDDEDataset; alg=Tsit5(), dense=true)
     for h0 in d.h0s
         u0 = h0(d.p, t[1])
         prob = remake(d.prob, u0=u0, h0=h0, tspan=d.tspan, constant_lags=d.constant_lags)
-        sol = solve(prob, MethodOfSteps(alg), p=d.p, saveat=t, save_idxs=d.obs_ids, callback=d.callback)
+        sol = solve(prob, MethodOfSteps(alg), p=d.p, saveat=t, save_idxs=d.obs_ids)#, callback=d.callback)
         if dense
             dense_sol = solve(prob, MethodOfSteps(alg), p=d.p, save_idxs=d.obs_ids, dense=true, callback=d.callback)
             tot_sol = ξ -> ξ>=sol.t[1]&&ξ<=sol.t[end] ? dense_sol(ξ) : (ξ<sol.t[1]&&ξ>=tot_tspan[1] ? h0(d.p,ξ)[d.obs_ids] : zero(u0[d.obs_ids]))
@@ -287,9 +287,9 @@ function get_gp(x, y, σ; k0="RBF")
     function objective_function(x, y)
         function negative_log_likelihood(params)
             kernel =
-                (exp(params[1])+1e-10) * (k0 ∘ ScaleTransform(exp(params[2])+1e-10))
+                (exp(params[1])+1e-5) * (k0 ∘ ScaleTransform(exp(params[2])+1e-5))
             f = GP(kernel)
-            fx = f(x, exp(params[3])+1e-10)
+            fx = f(x, exp(params[3])+1e-5)
             # fx = f(x, σ)
             return -logpdf(fx, y)
         end
@@ -298,10 +298,10 @@ function get_gp(x, y, σ; k0="RBF")
     p0 = [0.0,0.0, log(σ)]
     opt = optimize(objective_function(x, y), p0, LBFGS())
     opt_kernel =
-        (exp(opt.minimizer[1])+1e-10) *
-        (k0 ∘ ScaleTransform(exp(opt.minimizer[2])+1e-10))
+        (exp(opt.minimizer[1])+1e-5) *
+        (k0 ∘ ScaleTransform(exp(opt.minimizer[2])+1e-5))
     opt_f = GP(opt_kernel)
-    opt_fx = opt_f(x, exp(opt.minimizer[3])+1e-10)
+    opt_fx = opt_f(x, exp(opt.minimizer[3])+1e-5)
     # opt_fx = opt_f(x, σ)
     opt_p_fx =  posterior(opt_fx, y)
 
@@ -399,13 +399,13 @@ function get_noisy_batch_h0(ts::AbstractArray, us::AbstractArray, traj_ids::Abst
             p_fx = get_gp(t_hist, u_hist[i,:], d.σ,k0=k0)
             push!(h0, t -> mean(p_fx([t])))
 
-            # show gps
-            pl=plot()
-            plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx)
-            # plot!(pl,gp)
-            scatter!(pl, t_hist, u_hist[i,:])
-            plot!(pl, t->d.trajs[traj_idx][3](t)[i], title=string(traj_idx)*"_"*string(i))
-            display(pl)
+            # # show gps
+            # pl=plot()
+            # plot!(pl, t_hist[1]:0.01:t_hist[end], p_fx)
+            # # plot!(pl,gp)
+            # scatter!(pl, t_hist, u_hist[i,:])
+            # plot!(pl, t->d.trajs[traj_idx][3](t)[i], title=string(traj_idx)*"_"*string(i))
+            # display(pl)
         end
         push!(h0s, t -> vcat(map(i -> h0[i](t), 1:length(h0))...))
 

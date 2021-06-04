@@ -92,6 +92,12 @@ include("../util/import.jl")
 # using GaussianProcesses
 using AbstractGPs
 
+current_time = Dates.format(now(), "HH:MM/")
+aa = current_time = Dates.format(now(), "HH:MM/")
+aa = now()
+bb = now() - aa
+bb > Minute(1)
+
 ## log path
 # current_time = Dates.format(now(), "_dd-mm-yy_HH:MM/")
 # runname = "stable oscillator"*current_time

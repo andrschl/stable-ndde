@@ -2,20 +2,20 @@
 config = Dict(
     # on server?
     "server" => false,
-    "logging" => true,
+    "logging" => false,
 
     # ndde training
-    "ntrain_trajs" => 1,
-    "ntest_trajs" => 1,
+    "ntrain_trajs" => 2,
+    "ntest_trajs" => 2,
     "T_train" => 20.0,
-    "T_test" => 100.0,
-    "datasize" => 500,
+    "T_test" => 40.0,
+    "datasize" => 150,
     #"Δt_data" => 0.4,
-    "batchtime" => 500,
-    "batchsize" => 1,
+    "batchtime" => 50,
+    "batchsize" => 16,
     "const_init" => false,
-    "σ" => 0.05,
-    "k0" => "Mat52",            # ks ∈ [Mat32, Mat52, RBF]
+    "σ" => 0.00,
+    "k0" => "RBF",            # ks ∈ [Mat32, Mat52, RBF]
 
     # ndde model
     "Δtf" => 0.5,
@@ -25,7 +25,7 @@ config = Dict(
     "lr_rel_decay" => 0.1,
     "lr_start_max" => 5e-3,
     "lr_start_min" => 1e-4,
-    "lr_period" => 20,
+    "lr_period" => 100,
     "nepisodes" => 1000,
 
     # logging
@@ -36,13 +36,16 @@ config = Dict(
 ## argsparse
 seed = 1
 if length(ARGS) >= 1
-    seed = parse(Int64, ARGS[1])
+    config["nepisodes"] = parse(Int64, ARGS[1])
 end
 if length(ARGS) >= 2
-    config["k0"] = ARGS[3]
+    config["lr_period"] = parse(Int64, ARGS[2])
 end
 if length(ARGS) >= 3
-    config["σ"] = parse(Float64, ARGS[4])
+    config["batchtime"] = parse(Int64, ARGS[3])
+end
+if length(ARGS) >= 4
+    config["batchsize"] = parse(Int64, ARGS[4])
 end
 
 ## some server specific stuff..
@@ -64,16 +67,16 @@ using AbstractGPs
 # runname = "stable oscillator"*current_time
 # logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
 
-project_name = "LV"
-runname = "seed_"*string(seed)
-configname = string(config["σ"])*"/"*config["k0"]*"/"
+project_name = "LV_NDDE"
+# runname = "seed_"*string(seed)
+configname = string(config["nepisodes"])*"/"*string(config["lr_period"])*"/"*string(config["batchtime"])*"/"*string(config["batchsize"])
 devicename = config["server"] ? "server_" : "blade_"
-logpath = "reports/"*project_name*"/"*configname*runname*"/"
+logpath = "reports/"*project_name*"/"*configname*"/"
 mkpath(logpath)
 if config["logging"]
     wandb = pyimport("wandb")
     # wandb.init(project=splitext(basename(@__FILE__))[1], entity="andrschl", config=config, name=runname)
-    wandb.init(project=project_name, config=config, name=runname, group=devicename*"longterm_"*configname)
+    wandb.init(project=project_name, config=config, name=configname, group=devicename)
 end
 
 ## set seed
@@ -85,13 +88,12 @@ include("../datasets/lotka_volterra.jl")
 
 config["Δt_data"] = config["T_train"]/config["datasize"]
 
-# initial conditions
-distr_train = MixtureModel(Uniform, [(-2.0, -2.0/2), (2.0/2, 2.0)])
-distr_test = distr_train
-
 # ICs_train = map(i-> rand(distr_train, 2), 1:config["ntrain_trajs"])
 # ICs_test = map(i-> rand(distr_test, 2), 1:config["ntest_trajs"])
-ICs_train = [[1.0,1.0]]
+u0_init1 = sol=solve(LV_prob, tspan=(0.0,-5.0), u0=[2.0,2.0], dense=true)(-5.0)
+u0_init2 = sol=solve(LV_prob, tspan=(0.0,-5.0), u0=[3.0,3.0], dense=true)(-5.0)
+
+ICs_train = [u0_init1, u0_init2]
 ICs_test = ICs_train
 tspan_train = (0.0, config["T_train"])
 tspan_test = (0.0, config["T_test"])
@@ -118,9 +120,16 @@ pv = model.pv
 # iterate(lyap_loader)
 ## training
 include("../training/training_util.jl")
-get_noisy_ndde_batch_and_h0(df_train, config["batchtime"], config["batchsize"],k0="Mat32")
-plot(0:0.01:20, t->df_train.trajs[1][3](t)[1])
-scatter!(df_train.noisy_trajs[1][1], vcat(df_train.noisy_trajs[1][2]...))
+length(df_train)
+df_train
+get_noisy_ndde_batch_and_h0(df_train, config["batchtime"], config["batchsize"])
+# plot(0:0.01:40, t->df_train.trajs[1][3](t)[1])
+# scatter!(df_train.noisy_trajs[1][1], vcat(df_train.noisy_trajs[1][2]...))
+# plot(0:0.01:40, t->df_train.trajs[2][3](t)[1])
+# scatter!(df_train.noisy_trajs[2][1], vcat(df_train.noisy_trajs[2][2]...))
+
+test_loss_data = DataFrame(iter = Int[], test_loss = Float64[])
+train_loss_data = DataFrame(iter = Int[], train_loss = Float64[])
 
 3
 @time begin
