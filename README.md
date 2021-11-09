@@ -1,13 +1,15 @@
 # Stable time-delay systems
 [**Requirements**](#requirements)
 | [**Training**](#training)
-| [**Results**](#results)
 | [**Contributing**](#contributing)
 
-This repository is the official implementation of [Learning Stable Deep Dynamics Models for Partially Observed or Delayed Dynamical Systems](https://arxiv.org/abs/2110.14296). 
+This repository is the official implementation of [Learning Stable Deep Dynamics Models for Partially Observed or Delayed Dynamical Systems](https://arxiv.org/abs/2110.14296).
+
+## Requirements
+Update on requirements follows!
 
 ## Training
-This code implements stable Neural DDEs. For reproduce our results simply run the following python scripts in src/experiments/:
+This code implements stable Neural DDEs. To reproduce our results simply run the following python scripts in src/experiments/:
 - scr/train_ANODE_cos.jl
 - scr/train_NDDE_cos.jl
 - src/train_n_pendulum_LRF_alongtraj.jl
