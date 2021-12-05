@@ -5,6 +5,6 @@ using Random, Distributions
 using Calculus, Dates
 using LinearAlgebra
 if !config["server"]
-    using Plots, Latexify, ColorSchemes
+    using Plots, ColorSchemes
 end
 using CSV, DataFrames

@@ -2,7 +2,7 @@
 config = Dict(
     # on server?
     "server" => false,
-    "logging" => true,
+    "logging" => false,
 
     # lr schedule
     "lr_rel_decay" => 0.1,
@@ -49,10 +49,6 @@ using PyCall
 include("../util/import.jl")
 
 ## log path
-# current_time = Dates.format(now(), "_dd-mm-yy_HH:MM/")
-# runname = "stable oscillator"*current_time
-# logpath = "reports/"*splitext(basename(@__FILE__))[1]*current_time
-
 project_name = "cos_ANODE"
 runname = "seed_"*string(seed)
 configname = "/"*string(config["σ"])*"/"

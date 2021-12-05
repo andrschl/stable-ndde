@@ -2,7 +2,7 @@
 config = Dict(
     # on server?
     "server" => false,
-    "logging" => true,
+    "logging" => false,
 
     # lr schedule
     "lr_rel_decay" => 0.1,
@@ -143,7 +143,6 @@ df_train.N = length(df_train.trajs[1][1]) - df_train.N_hist
 Random.seed!(123+seed)
 gen_noise!(df_train, config["σ"])
 
-hcat(df_train.noisy_trajs[1][2]...)[1,:]
 ts, batch_u, batch_h0,_ = get_noisy_ndde_batch_and_h0(df_train, config["batchtime"], config["batchsize"])
 
 pl = scatter(t, hcat(df_train.noisy_trajs[1][2]...)[1,:], label="data")
